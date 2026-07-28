@@ -1,0 +1,24 @@
+#version 450
+
+layout (local_size_x = 16, local_size_y = 16) in;
+
+layout (binding = 0, rgba16f) readonly uniform image2D hdrImage;
+layout (binding = 1, rgba8)   writeonly uniform image2D ldrImage;
+
+float3 tonemap(float3 hdr) {
+    // Reinhard simple
+    return hdr / (hdr + float3(1.0));
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+
+    ivec2 size = imageSize(hdrImage);
+    if (coord.x >= size.x || coord.y >= size.y)
+        return;
+
+    vec4 hdr = imageLoad(hdrImage, coord);
+    float3 mapped = tonemap(hdr.rgb);
+
+    imageStore(ldrImage, coord, vec4(mapped, 1.0));
+}
