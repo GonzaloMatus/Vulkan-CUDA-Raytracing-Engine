@@ -195,25 +195,54 @@ bool command_buffers_record(
         );
 
         /* ============================================================
-           8. Copy LDR image → swapchain
-           ============================================================ */
-        VkImageCopy ldr_to_swap = {0};
-        ldr_to_swap.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        ldr_to_swap.srcSubresource.layerCount = 1;
-        ldr_to_swap.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        ldr_to_swap.dstSubresource.layerCount = 1;
-        ldr_to_swap.extent.width  = ldr->width;
-        ldr_to_swap.extent.height = ldr->height;
-        ldr_to_swap.extent.depth  = 1;
+           8. Blit LDR image → swapchain.
 
-        vkCmdCopyImage(
+           Usamos vkCmdBlitImage en lugar de vkCmdCopyImage porque el LDR
+           y el swapchain pueden tener formatos con distinto orden de
+           canales (RGBA8 vs BGRA8). El blit deja que el driver haga el
+           swizzle de bytes si es necesario; el copy exigiría formatos
+           idénticos byte a byte.
+
+           - Windows: swapchain suele ser R8G8B8A8_UNORM. Blit RGBA8→RGBA8
+             a tamaño idéntico es un copy 1:1.
+           - macOS:  swapchain es B8G8R8A8_UNORM (CoreAnimation). Blit
+             RGBA8→BGRA8 hace el swap R↔B de forma transparente.
+
+           El filtro es NEAREST porque no hay escalado: src y dst tienen
+           exactamente las mismas dimensiones.
+           ============================================================ */
+        VkImageBlit blit_region = {0};
+        blit_region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit_region.srcSubresource.mipLevel   = 0;
+        blit_region.srcSubresource.baseArrayLayer = 0;
+        blit_region.srcSubresource.layerCount = 1;
+        blit_region.srcOffsets[0] = (VkOffset3D){ 0, 0, 0 };
+        blit_region.srcOffsets[1] = (VkOffset3D){
+            (int32_t)ldr->width,
+            (int32_t)ldr->height,
+            1
+        };
+
+        blit_region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit_region.dstSubresource.mipLevel   = 0;
+        blit_region.dstSubresource.baseArrayLayer = 0;
+        blit_region.dstSubresource.layerCount = 1;
+        blit_region.dstOffsets[0] = (VkOffset3D){ 0, 0, 0 };
+        blit_region.dstOffsets[1] = (VkOffset3D){
+            (int32_t)swapchain->extent.width,
+            (int32_t)swapchain->extent.height,
+            1
+        };
+
+        vkCmdBlitImage(
             cmd->buffers[i],
             ldr->image,
             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             swapchain->images[i],
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             1,
-            &ldr_to_swap
+            &blit_region,
+            VK_FILTER_NEAREST
         );
 
         /* ============================================================
@@ -233,12 +262,9 @@ bool command_buffers_record(
         vkEndCommandBuffer(cmd->buffers[i]);
     }
 
-    printf("Command buffers recorded (CUDA -> HDR -> Tonemap -> Swapchain)\n");
+    printf("Command buffers recorded (compute -> HDR -> Tonemap -> Swapchain)\n");
     return true;
 }
-
-
-
 
 
 void command_buffers_destroy(CommandBuffers* cmd, const VulkanContext* ctx) {

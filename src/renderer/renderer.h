@@ -6,7 +6,7 @@
 #include "command_buffers/command_buffers.h"
 #include "sync/sync.h"
 #include "render_target/render_target.h"
-#include "cuda_renderer/cuda_renderer.h"
+#include "../compute/raytracer.h"
 #include "gpu_render_buffer/gpu_render_buffer.h"
 #include "render_target_hdr/render_target_hdr.h"
 #include "tonemap_pipeline/tonemap_pipeline.h"
@@ -18,7 +18,7 @@ typedef struct {
     const Window* window;
     VulkanContext vk;
     GpuRenderBuffer gpu_render_buffer;
-    CudaRenderTarget cuda_render_target;
+    Raytracer raytracer;
     RenderTargetHDR hdr_render_target;
     TonemapPipeline tonemap_pipeline;
     RenderTarget render_target;

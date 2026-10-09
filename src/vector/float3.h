@@ -1,7 +1,9 @@
 #pragma once
 #include <stdbool.h>
 
+#ifndef M_PI
 #define M_PI 3.14159265358979323846
+#endif
 #ifndef __cplusplus
 typedef struct {
     union {

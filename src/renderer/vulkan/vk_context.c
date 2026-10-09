@@ -6,6 +6,7 @@
 #include <string.h>
 #include "../../core/window.h"
 
+
 #ifndef NDEBUG
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT severity,
@@ -61,10 +62,8 @@ static void destroy_debug_messenger(VkInstance instance,
 
 typedef struct {
     VkPhysicalDevice physical_device;
-
     uint32_t graphics_family;
     uint32_t present_family;
-
     bool has_graphics;
     bool has_present;
 } VulkanDeviceSelection;
@@ -94,7 +93,9 @@ static bool vk_create_instance(VulkanContext* ctx) {
     VkInstanceCreateInfo create_info = {0};
     create_info.sType            = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     create_info.pApplicationInfo = &app_info;
-    create_info.flags            = vk_platform_instance_flags();
+
+    // La plataforma decide el flag (0 para KosmicKrisp, portability para MoltenVK).
+    create_info.flags = vk_platform_instance_flags();
 
     /* --- Extensiones de instancia: plataforma + debug opcional --- */
     const char* extensions[8];
@@ -122,6 +123,9 @@ static bool vk_create_instance(VulkanContext* ctx) {
 #else
     create_info.enabledLayerCount = 0;
 #endif
+
+    printf("[vk] Using driver: %s\n",
+           vk_platform_is_kosmickrisp() ? "KosmicKrisp" : "MoltenVK");
 
     VkResult res = vkCreateInstance(&create_info, NULL, &ctx->instance);
     if (res != VK_SUCCESS) {
@@ -243,6 +247,7 @@ static bool vk_create_logical_device(const VulkanDeviceSelection* selection,
     create_info.pQueueCreateInfos       = queue_infos;
     create_info.pEnabledFeatures        = &device_features;
 
+    // La plataforma ya devuelve la lista correcta según el driver activo.
     uint32_t device_ext_count = 0;
     const char** device_exts  = vk_platform_device_extensions(&device_ext_count);
     create_info.enabledExtensionCount   = device_ext_count;

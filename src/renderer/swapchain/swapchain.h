@@ -14,6 +14,9 @@ typedef struct {
 } Swapchain;
 
 
-bool swapchain_create(Swapchain* swapchain, const VulkanContext* ctx, uint32_t width, uint32_t height);
+bool swapchain_create(Swapchain* swapchain, const VulkanContext* ctx,
+                      uint32_t width, uint32_t height,
+                      VkSwapchainKHR old_swapchain);
 
+void swapchain_destroy_image_views(Swapchain* swapchain, const VulkanContext* ctx);
 void swapchain_destroy(Swapchain* swapchain, const VulkanContext* ctx);

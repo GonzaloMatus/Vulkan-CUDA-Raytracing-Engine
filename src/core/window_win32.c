@@ -336,3 +336,7 @@ void window_destroy(Window* window) {
     DestroyWindow((HWND)window->handle);
     window->handle = NULL;
 }
+
+bool vk_platform_is_kosmickrisp(void) {
+    return false;   // KosmicKrisp solo existe en macOS.
+}

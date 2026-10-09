@@ -1,15 +1,21 @@
 #pragma once
 #include <vulkan/vulkan.h>
 #include <stdint.h>
-#include <windows.h>
 #include <stdbool.h>
 
 typedef struct {
-    VkBuffer buffer;
+    VkBuffer       buffer;
     VkDeviceMemory memory;
-    VkDeviceSize size;
+    VkDeviceSize   size;
 
-    HANDLE win32_handle;
+    // Puntero host al buffer mapeado. Solo válido en plataformas UMA
+    // (macOS Apple Silicon). En Windows es NULL.
+    void*          mapped;
+
+    // Handle nativo para interop con el backend de cómputo.
+    // Win32: HANDLE de VK_KHR_external_memory_win32
+    // macOS: mismo valor que `mapped` (para que raytracer lo use directo)
+    void*          native_handle;
 } GpuRenderBuffer;
 
 bool gpu_render_buffer_create(

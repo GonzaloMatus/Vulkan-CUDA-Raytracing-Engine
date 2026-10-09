@@ -80,3 +80,8 @@ void cuda_external_memory_destroy(CudaExternalMemory* mem) {
         mem->handle = nullptr;
     }
 }
+
+
+bool cuda_sync(void) {
+    return cudaDeviceSynchronize() == cudaSuccess;
+}

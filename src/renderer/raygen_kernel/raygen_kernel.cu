@@ -8,7 +8,7 @@
 #include "../../vector/float3.h"
 #include "../../camera/camera.h"
 #include "../../scene/scene_gpu.h"
-#include "../cuda_renderer/cuda_renderer.h"
+#include "raygen_kernel.h"
 #include "../../scene/sphere/sphere.h"
 #include "../../scene/cylinder/cylinder.h"
 #include "../../scene/material/material.h"
@@ -924,26 +924,24 @@ __global__ void raygen_kernel(half4* __restrict__ pixels, float4* __restrict__ a
 // -----------------------------------------------------------------------------
 //
 
-void execute_raygen_kernel(CudaRenderTarget* render_target, uint32_t frame_index, const Camera* camera, SceneGPU* scene_gpu) {
-    // La escena solo se copia si cambia (ver cambio 2)
-    if (scene_gpu->is_dirty) {
-        CUDA_CHECK(cudaMemcpyToSymbol(scene, scene_gpu, sizeof(SceneGPU)));
-    }
-    scene_gpu->is_dirty = false;
+void execute_raygen_kernel(void* device_ptr, void* accumulation_buffer,
+                           uint32_t width, uint32_t height,
+                           uint32_t frame_index,
+                           const Camera* cam, const SceneGPU* scene_gpu) {
+    // Solo la escena va a __constant__. La cámara ahora es argumento del kernel.
+    CUDA_CHECK(cudaMemcpyToSymbol(scene, scene_gpu, sizeof(SceneGPU)));
 
     dim3 block_size(16, 16);
     dim3 grid_size(
-        (render_target->width  + block_size.x - 1) / block_size.x,
-        (render_target->height + block_size.y - 1) / block_size.y
+        (width  + block_size.x - 1) / block_size.x,
+        (height + block_size.y - 1) / block_size.y
     );
 
     raygen_kernel<<<grid_size, block_size>>>(
-        (half4*)render_target->device_ptr,
-        (float4*)render_target->accumulation_buffer,
+        (half4*)device_ptr,
+        (float4*)accumulation_buffer,
         frame_index,
-        *camera
-    );
-
+        *cam);
 
     CUDA_CHECK(cudaGetLastError());
 }

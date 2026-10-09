@@ -10,6 +10,7 @@
 #include "../scene/scene.h"
 #include "../scene/scene_gpu.h"
 #include "../camera/camera.h"
+#include "../compute/compute.h"
 
 
 static void app_update(Application* app) {
@@ -60,7 +61,13 @@ void app_init(Application* app) {
     app->last_time_s = get_current_time_seconds();
     app->delta_time_s = 0.0;
     input_init(&app->input);
-    
+
+    // Backend de cómputo (CUDA en Win32, Metal en macOS).
+    if (!compute_init()) {
+        fprintf(stderr, "Failed to initialize compute backend.\n");
+        exit(EXIT_FAILURE);
+    }
+
     if (!window_init(&app->window, 800, 600, "C Application Window", &app->input)) {
         fprintf(stderr, "Failed to initialize window.\n");
         exit(EXIT_FAILURE);
@@ -128,6 +135,7 @@ void app_shutdown(Application* app) {
     scene_destroy(&app->scene);
     scene_gpu_destroy(&app->scene_gpu);
     window_destroy(&app->window);
+    compute_shutdown();
 }
 
 void app_request_exit(Application* app) {

@@ -8,7 +8,7 @@
 #include "bvh.h"
 #include "../primitives.h"
 #include "bvh_gpu.h"
-#include "../../cuda_api/cuda_api.h"
+#include "../../compute/compute.h"
 
 static void print_enclosure(AABB aabb) {
     printf("A = ");
@@ -31,11 +31,15 @@ bool bvh_gpu_create(BVHGPU* gpu, const BVH* cpu) {
     printf("Average objects per leaf: %f\n", (double) node_object_indexes.size / (double) ((cpu->amount_nodes + 1) / 2));
     node_object_indexes.data = malloc(node_object_indexes.size * sizeof(size_t));
 
-    if (!cuda_alloc((void**) &gpu->object_indexes.data, node_object_indexes.size * sizeof(size_t))) {
+    if (!compute_alloc((void**) &gpu->object_indexes.data, node_object_indexes.size * sizeof(size_t))) {
+        free(node_object_indexes.data);
         return false;
     }
 
-    if (!cuda_alloc((void**) &gpu->nodes.data, cpu->amount_nodes * sizeof(NodeGPU))) {
+    if (!compute_alloc((void**) &gpu->nodes.data, cpu->amount_nodes * sizeof(NodeGPU))) {
+        compute_free((void*) gpu->object_indexes.data);
+        gpu->object_indexes.data = NULL;
+        free(node_object_indexes.data);
         return false;
     }
 
@@ -58,13 +62,17 @@ bool bvh_gpu_create(BVHGPU* gpu, const BVH* cpu) {
     }
 
     gpu->object_indexes.size = node_object_indexes.size;
-    if (!cuda_memcpy_to_device(gpu->object_indexes.data, node_object_indexes.data, gpu->object_indexes.size * sizeof(size_t))) {
+    if (!compute_memcpy_to(gpu->object_indexes.data, node_object_indexes.data, gpu->object_indexes.size * sizeof(size_t))) {
+        free(nodes.data);
+        free(node_object_indexes.data);
         return false;
     }
 
 
     gpu->nodes.size = cpu->amount_nodes;
-    if (!cuda_memcpy_to_device(gpu->nodes.data, nodes.data, gpu->nodes.size * sizeof(NodeGPU))) {
+    if (!compute_memcpy_to(gpu->nodes.data, nodes.data, gpu->nodes.size * sizeof(NodeGPU))) {
+        free(nodes.data);
+        free(node_object_indexes.data);
         return false;
     }
 
@@ -76,8 +84,8 @@ bool bvh_gpu_create(BVHGPU* gpu, const BVH* cpu) {
 
 
 void bvh_gpu_destroy(BVHGPU* gpu) {
-    cuda_free((void*)gpu->nodes.data);
+    compute_free((void*)gpu->nodes.data);
     gpu->nodes.size = 0;
-    cuda_free((void*)gpu->object_indexes.data);
+    compute_free((void*)gpu->object_indexes.data);
     gpu->object_indexes.size = 0;
 }

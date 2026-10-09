@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include "swapchain.h"
 #include "../vulkan/vk_context.h"
+#include "../vulkan/vk_platform.h"
 
 typedef struct {
     VkSurfaceCapabilitiesKHR capabilities;
@@ -25,7 +26,6 @@ static bool query_swapchain_support(VkPhysicalDevice physical_device, VkSurfaceK
     }
 
     support->formats = malloc(sizeof(VkSurfaceFormatKHR) * support->format_count);
-
     vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &support->format_count, support->formats);
 
     vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &support->present_mode_count, NULL);
@@ -35,8 +35,7 @@ static bool query_swapchain_support(VkPhysicalDevice physical_device, VkSurfaceK
         return false;
     }
 
-    support->present_modes = malloc( sizeof(VkPresentModeKHR) * support->present_mode_count);
-
+    support->present_modes = malloc(sizeof(VkPresentModeKHR) * support->present_mode_count);
     vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &support->present_mode_count, support->present_modes);
 
     return true;
@@ -45,7 +44,8 @@ static bool query_swapchain_support(VkPhysicalDevice physical_device, VkSurfaceK
 
 static VkSurfaceFormatKHR choose_surface_format(const SwapchainSupport* support) {
     for (uint32_t i = 0; i < support->format_count; i++) {
-        if (support->formats[i].format == VK_FORMAT_R8G8B8A8_UNORM && support->formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+        if (support->formats[i].format == VK_FORMAT_R8G8B8A8_UNORM &&
+            support->formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
             return support->formats[i];
         }
     }
@@ -61,6 +61,7 @@ static VkPresentModeKHR choose_present_mode(const SwapchainSupport* support) {
     }
     return VK_PRESENT_MODE_FIFO_KHR;
 }
+
 
 static VkExtent2D choose_extent(const VkSurfaceCapabilitiesKHR* caps, uint32_t width, uint32_t height) {
     if (caps->currentExtent.width != UINT32_MAX) {
@@ -89,7 +90,9 @@ static void free_swapchain_support(SwapchainSupport* support) {
 }
 
 
-bool swapchain_create(Swapchain* swapchain, const VulkanContext* ctx, uint32_t width, uint32_t height) {
+bool swapchain_create(Swapchain* swapchain, const VulkanContext* ctx,
+                      uint32_t width, uint32_t height,
+                      VkSwapchainKHR old_swapchain) {
     SwapchainSupport support;
     if (!query_swapchain_support(ctx->physical_device, ctx->surface, &support)) {
         fprintf(stderr, "Swapchain not supported\n");
@@ -101,7 +104,6 @@ bool swapchain_create(Swapchain* swapchain, const VulkanContext* ctx, uint32_t w
     VkExtent2D extent = choose_extent(&support.capabilities, width, height);
 
     uint32_t image_count = support.capabilities.minImageCount + 1;
-
     if (support.capabilities.maxImageCount > 0 && image_count > support.capabilities.maxImageCount) {
         image_count = support.capabilities.maxImageCount;
     }
@@ -126,21 +128,46 @@ bool swapchain_create(Swapchain* swapchain, const VulkanContext* ctx, uint32_t w
     info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     info.presentMode = present_mode;
     info.clipped = VK_TRUE;
+    info.oldSwapchain = old_swapchain;
 
-    if (vkCreateSwapchainKHR(ctx->device, &info, NULL, &swapchain->handle) != VK_SUCCESS) {
+    VkSwapchainKHR new_handle = VK_NULL_HANDLE;
+    if (vkCreateSwapchainKHR(ctx->device, &info, NULL, &new_handle) != VK_SUCCESS) {
         fprintf(stderr, "Failed to create swapchain\n");
+        free_swapchain_support(&support);
         return false;
     }
 
+    // El viejo ya está retirado por el driver. La spec dice que la aplicación
+    // debe destruirlo explícitamente, pero MoltenVK tiene un bug conocido en
+    // MVKImagePlane::releaseMTLTexture que crashea al hacerlo cuando el
+    // swapchain se creó con oldSwapchain. En KosmicKrisp (driver conforme)
+    // no ocurre, así que destruimos normalmente. En MoltenVK lo dejamos
+    // vivo; el driver lo libera al destruir el device, y el leak es pequeño.
+    if (old_swapchain != VK_NULL_HANDLE) {
+        if (vk_platform_is_kosmickrisp()) {
+            vkDestroySwapchainKHR(ctx->device, old_swapchain, NULL);
+        }
+        // else: MoltenVK workaround, no destruir.
+    }
+
+    // Liberar arrays previos si veníamos de un recreate.
+    if (swapchain->image_views) {
+        free(swapchain->image_views);
+        swapchain->image_views = NULL;
+    }
+    if (swapchain->images) {
+        free(swapchain->images);
+        swapchain->images = NULL;
+    }
+
+    swapchain->handle = new_handle;
     vkGetSwapchainImagesKHR(ctx->device, swapchain->handle, &swapchain->image_count, NULL);
 
     swapchain->images = malloc(sizeof(VkImage) * swapchain->image_count);
-
     vkGetSwapchainImagesKHR(ctx->device, swapchain->handle, &swapchain->image_count, swapchain->images);
 
     swapchain->image_format = format.format;
     swapchain->extent = extent;
-
     swapchain->image_views = malloc(sizeof(VkImageView) * swapchain->image_count);
 
     for (uint32_t i = 0; i < swapchain->image_count; i++) {
@@ -157,26 +184,59 @@ bool swapchain_create(Swapchain* swapchain, const VulkanContext* ctx, uint32_t w
 
         if (vkCreateImageView(ctx->device, &view, NULL, &swapchain->image_views[i]) != VK_SUCCESS) {
             fprintf(stderr, "Failed to create image view\n");
+            free_swapchain_support(&support);
             return false;
         }
     }
 
     free_swapchain_support(&support);
-
     printf("Swapchain created (%u images)\n", swapchain->image_count);
     return true;
 }
 
 
+void swapchain_destroy_image_views(Swapchain* swapchain, const VulkanContext* ctx) {
+    if (!swapchain) return;
+
+    if (swapchain->image_views) {
+        for (uint32_t i = 0; i < swapchain->image_count; i++) {
+            if (swapchain->image_views[i]) {
+                vkDestroyImageView(ctx->device, swapchain->image_views[i], NULL);
+            }
+        }
+        free(swapchain->image_views);
+        swapchain->image_views = NULL;
+    }
+    if (swapchain->images) {
+        free(swapchain->images);
+        swapchain->images = NULL;
+    }
+    swapchain->image_count = 0;
+}
+
+
 void swapchain_destroy(Swapchain* swapchain, const VulkanContext* ctx) {
-    for (uint32_t i = 0; i < swapchain->image_count; i++) {
-        vkDestroyImageView(ctx->device, swapchain->image_views[i], NULL);
+    if (!swapchain || !ctx) return;
+
+    if (swapchain->image_views) {
+        for (uint32_t i = 0; i < swapchain->image_count; i++) {
+            if (swapchain->image_views[i]) {
+                vkDestroyImageView(ctx->device, swapchain->image_views[i], NULL);
+            }
+        }
+        free(swapchain->image_views);
+        swapchain->image_views = NULL;
     }
 
-    free(swapchain->image_views);
-    free(swapchain->images);
+    if (swapchain->images) {
+        free(swapchain->images);
+        swapchain->images = NULL;
+    }
 
-    vkDestroySwapchainKHR(ctx->device, swapchain->handle, NULL);
+    if (swapchain->handle) {
+        vkDestroySwapchainKHR(ctx->device, swapchain->handle, NULL);
+        swapchain->handle = VK_NULL_HANDLE;
+    }
 
-    swapchain->handle = VK_NULL_HANDLE;
+    swapchain->image_count = 0;
 }

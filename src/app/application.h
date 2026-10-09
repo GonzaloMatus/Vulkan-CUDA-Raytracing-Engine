@@ -14,8 +14,8 @@ typedef struct {
     Window   window;
     Scene    scene;
     SceneGPU scene_gpu;
-    Camera camera;
-    double last_time_s;
+    Camera   camera;
+    double   last_time_s;
     double   delta_time_s;
     uint16_t target_fps;
     bool     is_running;

@@ -4,7 +4,10 @@
 #include "../vector/float3.h"
 #include <stdio.h>
 #include <stdint.h>
+
+#ifndef M_E
 #define M_E 2.7182818284590452354
+#endif
 
 float get_plane_distance(Camera* camera) {
     return (((float) camera->width) * 0.5f) / tanf(camera->w_fov * 0.5);
