@@ -43,7 +43,7 @@ static float clamp(float m, float x, float M) {
 }
 
 
-void update_camera(Camera* camera, Input* input, float time_s) {
+bool update_camera(Camera* camera, Input* input, float time_s) {
     const float acceleration = 500.0f + 1500.0f * ((float) input_is_down(input, 0x11));
     const float friction = 10.0f;
 
@@ -94,10 +94,12 @@ void update_camera(Camera* camera, Input* input, float time_s) {
         
     }
 
-    if (adjust_fov || adjust_rotation || move_camera) {
+    bool changed = adjust_fov || adjust_rotation || move_camera;
+    if (changed) {
         camera->saved_frames = 0;
     }
-    
+
+    return changed;
 }
 
 // Utility to explicitly refresh cached vectors (if needed)

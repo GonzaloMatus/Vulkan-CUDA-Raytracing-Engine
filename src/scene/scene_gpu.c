@@ -37,6 +37,8 @@ bool scene_gpu_create(SceneGPU* gpu, const Scene* cpu) {
     if (!copy_list_to_gpu((void**)&gpu->cylinders.data, &gpu->cylinders.size, cpu->primitives.cylinder_list.data, sizeof(Cylinder), cpu->primitives.cylinder_list.size))
         return false;
 
+    gpu->is_dirty = true;
+
     return true;
 }
 

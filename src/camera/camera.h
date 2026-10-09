@@ -1,6 +1,7 @@
 #pragma once
 #include "../vector/float3.h"
 #include "../core/input.h"
+#include <stdbool.h>
 #include <stdint.h>
 
 
@@ -27,7 +28,7 @@ typedef struct {
 
 
 void camera_innit(Camera* camera, uint32_t width, uint32_t height);
-void update_camera(Camera* camera, Input* input, float delta_time_miliseconds);
+bool update_camera(Camera* camera, Input* input, float delta_time_miliseconds);
 void camera_update_vectors(Camera* camera);
 float3 get_forward(Camera* camera);
 float3 get_up(Camera* camera);

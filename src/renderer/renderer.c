@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include "renderer.h"
-#include <windows.h>
 #include "vulkan/vk_context.h"
 #include <stdlib.h>
 #include "swapchain/swapchain.h"

@@ -7,7 +7,6 @@ static inline void push_triangle(Primitives* primitives, float3 a, float3 b, flo
     Triangle_list_push(&primitives->triangle_list, t);
 }
 
-
 void add_head(Primitives* primitives, float3 c, float r) {
     float3 top    = {c.x, c.y, c.z + r};
     float3 bottom = {c.x, c.y, c.z - r};
@@ -69,8 +68,6 @@ void add_person(Primitives* primitives, float3 p) {
     Sphere_list_push(&primitives->sphere_list, head);
 }
 
-
-
 void add_cube(Primitives* primitives, float3 center, float size) {
     float s = size * 0.5f;
 
@@ -82,7 +79,6 @@ void add_cube(Primitives* primitives, float3 center, float size) {
     box_create(&box, A, B, 7);
     Box_list_push(&primitives->box_list, box);
 }
-
 
 void add_pyramid(Primitives* primitives, float3 center, float base, float height) {
     float s = base * 0.5f;
@@ -105,7 +101,6 @@ void add_pyramid(Primitives* primitives, float3 center, float base, float height
     push_triangle(primitives, b3, b0, top, 4);
 }
 
-
 void add_floor(Primitives* primitives, float z, float size, int material_index) {
     float s = size * 0.5f;
 
@@ -119,55 +114,68 @@ void add_floor(Primitives* primitives, float z, float size, int material_index) 
     push_triangle(primitives, a, c, d, material_index);
 }
 
+// -----------------------------------------------------------------------------
+// Nueva función: genera una cuadrícula 3D de esferas
+// -----------------------------------------------------------------------------
+void add_sphere_grid(Primitives* primitives, int grid_size, float spacing, float radius) {
+    // Centrar la cuadrícula en el origen
+    float offset = (float)(grid_size - 1) * spacing * 0.5f;
+
+    for (int i = 0; i < grid_size; i++) {
+        for (int j = 0; j < grid_size; j++) {
+            for (int k = 0; k < grid_size; k++) {
+                float x = (float)i * spacing - offset;
+                float y = (float)j * spacing - offset;
+                float z = (float)k * spacing - offset;
+
+                // Variar ligeramente el radio y el material para dar variedad
+                float r = radius * (0.8f + 0.4f * ((i + j + k) % 5) / 4.0f);
+                int mat = (i * 7 + j * 13 + k * 23) % 9; // 9 materiales disponibles
+
+                Sphere sphere;
+                sphere_create(&sphere, x, y, z, r, mat);
+                Sphere_list_push(&primitives->sphere_list, sphere);
+            }
+        }
+    }
+}
 
 void load_primitives(Primitives* primitives) {
-    // Suelo
-    add_floor(primitives, -2.0f, 50.0f, 0);
+    // -------------------------------------------------------------------------
+    // ESCENA PROCEDURAL: 1,000,000 de esferas (100x100x100)
+    // -------------------------------------------------------------------------
+    // Ajusta GRID_SIZE para más o menos objetos:
+    //   GRID_SIZE = 100  -> 1,000,000 esferas
+    //   GRID_SIZE = 50   ->   125,000 esferas
+    //   GRID_SIZE = 200  -> 8,000,000 esferas (¡cuidado con la memoria!)
+    const int GRID_SIZE = 30;
+    const float SPACING = 10.0f;
+    const float RADIUS  = 0.4f;
 
-    // Luz en el techo
+    add_sphere_grid(primitives, GRID_SIZE, SPACING, RADIUS);
+
+    // -------------------------------------------------------------------------
+    // Objetos adicionales (opcionales, para referencia visual)
+    // -------------------------------------------------------------------------
+    // Una luz puntual en el centro, por encima de la cuadrícula
     Sphere light;
-    sphere_create(&light, 0, 0, 5, 2.5f, 6);
+    sphere_create(&light, 0, 0, (float)GRID_SIZE * SPACING * 0.8f, 5.0f, 6); // material emisivo
     Sphere_list_push(&primitives->sphere_list, light);
 
-    // Esfera blanca
-    Sphere sphere;
-    sphere_create(&sphere, -8, 0, 0, 2.2f, 0);
-    Sphere_list_push(&primitives->sphere_list, sphere);
-
-    // Esfera roja
-    sphere_create(&sphere, -3, 3, 0, 1.3f, 1);
-    Sphere_list_push(&primitives->sphere_list, sphere);
-
-    // Esfera verde
-    sphere_create(&sphere, 3, -2, 0, 1.6f, 2);
-    Sphere_list_push(&primitives->sphere_list, sphere);
-
-    // Cubo
-    add_cube(primitives, (float3){8,0,0},3);
-
-    // Pirámide
-    add_pyramid(primitives,(float3){13,2,-2},4,4);
-
-    // Cilindro
-    Cylinder cyl;
-    cylinder_create(&cyl, (float3){-13,-1,-2}, 1.5, 5, 4);
-    Cylinder_list_push(&primitives->cylinder_list,cyl);
-
-
+    // Un suelo grande debajo de la cuadrícula
+    add_floor(primitives, -(float)GRID_SIZE * SPACING * 0.8f, (float)GRID_SIZE * SPACING * 2.0f, 0);
 }
 
 bool primitives_innit(Primitives* primitives) {
-    primitives->sphere_list = Sphere_list_create(1);
-    primitives->triangle_list = Triangle_list_create(1);
-    primitives->box_list = Box_list_create(1);
-    primitives->cylinder_list = Cylinder_list_create(1);
+    primitives->sphere_list   = Sphere_list_create(1024);   // capacidad inicial grande
+    primitives->triangle_list = Triangle_list_create(1024);
+    primitives->box_list      = Box_list_create(1024);
+    primitives->cylinder_list = Cylinder_list_create(1024);
 
     load_primitives(primitives);
 
     return true;
 }
-
-
 
 void primitives_destroy(Primitives* primitives) {
     Sphere_list_free(&primitives->sphere_list);

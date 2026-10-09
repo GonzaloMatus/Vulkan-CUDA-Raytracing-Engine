@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 
-void execute_raygen_kernel(CudaRenderTarget* rt, uint32_t frame_index, const Camera* camera, const SceneGPU* scene);
+void execute_raygen_kernel(CudaRenderTarget* rt, uint32_t frame_index, const Camera* camera, SceneGPU* scene);
 
 #ifdef __cplusplus
 }

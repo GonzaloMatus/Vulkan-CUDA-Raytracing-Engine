@@ -34,13 +34,12 @@ typedef struct {
 
 typedef struct IntersectionObjectData {
     float closest_object_distance;
-    size_t closest_object_index;
+    uint32_t closest_object_index;
     Material material;
     float3 normal;
     float3 intersection;
 } IntersectionObjectData;
 
-__constant__ Camera camera;
 __constant__ SceneGPU scene;
 
 
@@ -63,7 +62,7 @@ __device__ __forceinline__ float rand01(uint32_t& seed) {
 // -----------------------------------------------------------------------------
 //
 
-__device__ static float3 compute_ray_direction(float u, float v) {
+__device__ static float3 compute_ray_direction(Camera camera, float u, float v) {
     const float u_offset = u - 0.5f;
     const float v_offset = v - 0.5f;
 
@@ -182,13 +181,13 @@ __device__ static IntersectionObjectData get_intersection(const float3 ray_orige
         // -------------------------
         // Leaf
         // -------------------------
-        const bool is_leaf = (2 * (size_t)node_index) + 1 >= scene.bvh.nodes.size;
+        const bool is_leaf = (2 * (uint32_t)node_index) + 1 >= scene.bvh.nodes.size;
         if (is_leaf) {
-            size_t start = node.start_index;
-            size_t end   = start + node.amount_objects;
+            uint32_t start = node.start_index;
+            uint32_t end   = start + node.amount_objects;
 
-            for (size_t i = start; i < end; i++) {
-                size_t object_index = scene.bvh.object_indexes.data[i];
+            for (uint32_t i = start; i < end; i++) {
+                uint32_t object_index = scene.bvh.object_indexes.data[i];
                 Object object = scene.objects.data[object_index];
                 float d = get_object_distance(ray_origen, ray_direction, object);
                 total_calls += 1;
@@ -205,8 +204,8 @@ __device__ static IntersectionObjectData get_intersection(const float3 ray_orige
         // Internal node
         // -------------------------
 
-        size_t child1_index = (2 * node_index) + 1;
-        size_t child2_index = (2 * node_index) + 2;
+        uint32_t child1_index = (2 * node_index) + 1;
+        uint32_t child2_index = (2 * node_index) + 2;
         
         const NodeGPU child1 = scene.bvh.nodes.data[child1_index];
         const NodeGPU child2 = scene.bvh.nodes.data[child2_index];
@@ -298,7 +297,7 @@ __device__ static IntersectionObjectData get_intersection2(const float3 ray_orig
         } BasicIntersectionData;
         
         typedef struct {
-            size_t node_index;
+            uint32_t node_index;
             BasicIntersectionData child_1;
             BasicIntersectionData child_2;
         } NodeInfo;
@@ -320,7 +319,7 @@ __device__ static IntersectionObjectData get_intersection2(const float3 ray_orig
         NodeInfo* node_info = &nodes[current_index];
         
         BasicIntersectionData* father_node_my_info;
-        const size_t node_index = node_info->node_index;
+        const uint32_t node_index = node_info->node_index;
         if (node_index % 2 == 1) {
             father_node_my_info = &nodes[current_index - 1].child_1;
         }
@@ -335,13 +334,13 @@ __device__ static IntersectionObjectData get_intersection2(const float3 ray_orig
         // -------------------------
         const bool is_leaf = (2 * node_index) + 1 >= scene.bvh.nodes.size;
         if (is_leaf) {
-            size_t start = node.start_index;
-            size_t end   = start + node.amount_objects;
+            uint32_t start = node.start_index;
+            uint32_t end   = start + node.amount_objects;
             
-            size_t closest_object_index;
+            uint32_t closest_object_index;
             float closest_object_distance = FLT_MAX;
-            for (size_t i = start; i < end; i++) {
-                size_t object_index = scene.bvh.object_indexes.data[i];
+            for (uint32_t i = start; i < end; i++) {
+                uint32_t object_index = scene.bvh.object_indexes.data[i];
                 Object object = scene.objects.data[object_index];
                 float d = get_object_distance(ray_origen, ray_direction, object);
                 total_calls += 1;
@@ -361,8 +360,8 @@ __device__ static IntersectionObjectData get_intersection2(const float3 ray_orig
         // Internal node
         // -------------------------
         
-        size_t child1_index = (2 * node_index) + 1;
-        size_t child2_index = (2 * node_index) + 2;
+        uint32_t child1_index = (2 * node_index) + 1;
+        uint32_t child2_index = (2 * node_index) + 2;
         
         const NodeGPU child1 = scene.bvh.nodes.data[child1_index];
         const NodeGPU child2 = scene.bvh.nodes.data[child2_index];
@@ -531,12 +530,12 @@ __device__ static IntersectionObjectData get_intersection2(const float3 ray_orig
             }
         }
     }
-    if (total_calls >= 1500) {
-        printf("total_calls = %i\n", total_calls);
-        printf("best.closest_object_distance = %f\n", best.closest_object_distance);
-    }
-    
     best.closest_object_distance = nodes[0].child_2.closest_object_distance;
+    //if (total_calls >= 2500 && total_calls % 100 == 0) {
+    //    printf("total_calls = %i\n", total_calls);
+    //    printf("best.closest_object_distance = %f\n", best.closest_object_distance);
+    //}
+    
     if (best.closest_object_distance < FLT_MAX)
         add_object_information(&best, ray_origen, ray_direction);
     return best;
@@ -552,7 +551,7 @@ __device__ static IntersectionObjectData get_intersection3(const float3 ray_orig
     } BasicIntersectionData;
     
     typedef struct {
-        size_t node_index;
+        uint32_t node_index;
         BasicIntersectionData child_1;
         BasicIntersectionData child_2;
     } NodeInfo;
@@ -561,7 +560,7 @@ __device__ static IntersectionObjectData get_intersection3(const float3 ray_orig
     best.closest_object_distance = FLT_MAX;
     best.closest_object_index = SIZE_MAX;
 
-    const int STACK_SIZE = 64;
+    const int STACK_SIZE = 32;
     NodeInfo stack[STACK_SIZE];
     int current_index = 0;
 
@@ -576,7 +575,7 @@ __device__ static IntersectionObjectData get_intersection3(const float3 ray_orig
         total_calls += 1;
         NodeInfo* node_info = &stack[current_index];
         BasicIntersectionData* father_node_my_info;
-        const size_t node_index = node_info->node_index;
+        const uint32_t node_index = node_info->node_index;
         if (node_index % 2 == 1) {
             father_node_my_info = &stack[current_index - 1].child_1;
         }
@@ -591,13 +590,13 @@ __device__ static IntersectionObjectData get_intersection3(const float3 ray_orig
         // -------------------------
         const bool is_leaf = (2 * node_index) + 1 >= scene.bvh.nodes.size;
         if (is_leaf) {
-            size_t start = node.start_index;
-            size_t end   = start + node.amount_objects;
+            uint32_t start = node.start_index;
+            uint32_t end   = start + node.amount_objects;
 
-            size_t closest_object_index;
+            uint32_t closest_object_index;
             float closest_object_distance = FLT_MAX;
-            for (size_t i = start; i < end; i++) {
-                size_t object_index = scene.bvh.object_indexes.data[i];
+            for (uint32_t i = start; i < end; i++) {
+                uint32_t object_index = scene.bvh.object_indexes.data[i];
                 Object object = scene.objects.data[object_index];
                 float d = get_object_distance(ray_origen, ray_direction, object);
                 bool same_object = (last_hit.closest_object_index == object_index && scene.objects.data[last_hit.closest_object_index].type == object.type);
@@ -616,8 +615,8 @@ __device__ static IntersectionObjectData get_intersection3(const float3 ray_orig
         // Internal node
         // -------------------------
 
-        size_t child1_index = (2 * node_index) + 1;
-        size_t child2_index = (2 * node_index) + 2;
+        uint32_t child1_index = (2 * node_index) + 1;
+        uint32_t child2_index = (2 * node_index) + 2;
 
         const NodeGPU child1 = scene.bvh.nodes.data[child1_index];
         const NodeGPU child2 = scene.bvh.nodes.data[child2_index];
@@ -818,7 +817,7 @@ __device__ static float3 get_new_direction(float3 N, uint32_t& seed) {
 // -----------------------------------------------------------------------------
 //
 
-__device__ static float3 get_color(float3 ray_origen, float3 ray_direction, uint32_t& seed, uint32_t x, uint32_t y) {
+__device__ static float3 get_color(Camera camera, float3 ray_origen, float3 ray_direction, uint32_t& seed, uint32_t x, uint32_t y) {
     IntersectionObjectData hit = {};
     hit.closest_object_index = SIZE_MAX;
 
@@ -875,7 +874,8 @@ __device__ static float3 get_color(float3 ray_origen, float3 ray_direction, uint
 // -----------------------------------------------------------------------------
 //
 
-__global__ void raygen_kernel(half4* pixels, float4* accumulation, uint32_t frame_index) {
+__global__ void raygen_kernel(half4* __restrict__ pixels, float4* __restrict__ accumulation, uint32_t frame_index, Camera camera)   // <-- nuevo argumento
+{
     const uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     const uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -887,9 +887,10 @@ __global__ void raygen_kernel(half4* pixels, float4* accumulation, uint32_t fram
     const float u = ((float)x + rand01(seed) - 0.5) / (float)camera.width;
     const float v = ((float)y + rand01(seed) - 0.5) / (float)camera.height;
 
-
-    float3 ray_direction = compute_ray_direction(u, v);
-    float3 color = get_color(camera.position, ray_direction, seed, x, y);
+    // Reemplaza `camera.` por `camera.` en compute_ray_direction o
+    // pasa `camera` como parámetro a compute_ray_direction
+    float3 ray_direction = compute_ray_direction(camera, u, v);
+    float3 color = get_color(camera, camera.position, ray_direction, seed, x, y);
 
     const float saved_frames = (float) camera.saved_frames;
     if (saved_frames == 0) {
@@ -923,9 +924,12 @@ __global__ void raygen_kernel(half4* pixels, float4* accumulation, uint32_t fram
 // -----------------------------------------------------------------------------
 //
 
-void execute_raygen_kernel(CudaRenderTarget* render_target, uint32_t frame_index, const Camera* cam, const SceneGPU* scene_gpu) {
-    CUDA_CHECK(cudaMemcpyToSymbol(camera, cam, sizeof(Camera)));
-    CUDA_CHECK(cudaMemcpyToSymbol(scene, scene_gpu, sizeof(SceneGPU)));
+void execute_raygen_kernel(CudaRenderTarget* render_target, uint32_t frame_index, const Camera* camera, SceneGPU* scene_gpu) {
+    // La escena solo se copia si cambia (ver cambio 2)
+    if (scene_gpu->is_dirty) {
+        CUDA_CHECK(cudaMemcpyToSymbol(scene, scene_gpu, sizeof(SceneGPU)));
+    }
+    scene_gpu->is_dirty = false;
 
     dim3 block_size(16, 16);
     dim3 grid_size(
@@ -933,7 +937,13 @@ void execute_raygen_kernel(CudaRenderTarget* render_target, uint32_t frame_index
         (render_target->height + block_size.y - 1) / block_size.y
     );
 
-    raygen_kernel<<<grid_size, block_size>>>((half4*)render_target->device_ptr, (float4*)render_target->accumulation_buffer, frame_index);
+    raygen_kernel<<<grid_size, block_size>>>(
+        (half4*)render_target->device_ptr,
+        (float4*)render_target->accumulation_buffer,
+        frame_index,
+        *camera
+    );
+
 
     CUDA_CHECK(cudaGetLastError());
 }

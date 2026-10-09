@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <stdbool.h>
 #include "scene.h"
 #include "../vector/float3.h"
 #include "sphere/sphere.h"
@@ -22,6 +23,8 @@ typedef struct {
     Triangle_array triangles;
     Box_array boxes;
     Cylinder_array cylinders;
+
+    bool is_dirty;
 } SceneGPU;
 
 bool scene_gpu_create(SceneGPU* gpu, const Scene* cpu);

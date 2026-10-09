@@ -16,7 +16,9 @@ static void app_update(Application* app) {
     if (app->window.should_close) {
         app_request_exit(app);
     }
-    update_camera(&app->camera, &app->input, (float) app->delta_time_s);
+    if (update_camera(&app->camera, &app->input, (float) app->delta_time_s)) {
+        app->scene_gpu.is_dirty = true;
+    }
     if (input_mouse_went_down(&app->input, 0)) {
         int x;
         int y;
@@ -35,6 +37,7 @@ static void app_render(Application* app) {
         app->camera.width = app->window.width;
         app->camera.height = app->window.height;
         app->camera.saved_frames = 0;
+        app->scene_gpu.is_dirty = true;
     }
     
     uint32_t image_index;
