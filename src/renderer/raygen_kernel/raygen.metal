@@ -582,7 +582,7 @@ inline float3 get_color(
     HitData hit;
     hit.object_index = (ulong)-1;
 
-    const float3 sky_radiance = float3(1.0f, 1.0f, 1.0f);
+    const float3 sky_radiance = float3(0.0f, 0.0f, 0.0f);
 
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
     float3 emission   = float3(0.0f, 0.0f, 0.0f);

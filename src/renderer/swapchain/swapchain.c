@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <stdio.h>
+#include <string.h>
 #include "swapchain.h"
 #include "../vulkan/vk_context.h"
 #include "../vulkan/vk_platform.h"
