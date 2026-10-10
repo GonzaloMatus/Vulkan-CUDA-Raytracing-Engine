@@ -95,57 +95,35 @@ __device__ static float3 compute_ray_direction(Camera camera, float u, float v) 
 // -----------------------------------------------------------------------------
 //
 
-__device__ static float get_object_distance(const float3 ray_origen, const float3 ray_direction, Object object) {
-    switch (object.type) {
-        case Spherical: {
-            const Sphere sphere = scene.spheres.data[object.index];
-            return sphere.get_intersection_distance(ray_origen, ray_direction);
-        }
-        case Triangular: {
-            const Triangle triangle = scene.triangles.data[object.index];
-            return triangle.get_intersection_distance(ray_origen, ray_direction);
-        }
-        case Boxed: {
-            const Box box = scene.boxes.data[object.index];
-            return box.get_intersection_distance(ray_origen, ray_direction);
-        }
-        case Cylindrical: {
-            const Cylinder cylinder = scene.cylinders.data[object.index];
-            return cylinder.get_intersection_distance(ray_origen, ray_direction);
-        }
-    }
-    return -1.0;
-}
-
 __device__ static void add_object_information(IntersectionObjectData* data, const float3 ray_origen, const float3 ray_direction) {
     data->intersection = ray_origen + ray_direction * data->closest_object_distance;
 
-    Object intersection_object = scene.objects.data[data->closest_object_index];
+    Object intersection_object = scene.bvh.objects.data[data->closest_object_index];
 
     switch (intersection_object.type) {
         case Spherical: {
-            const Sphere sphere = scene.spheres.data[intersection_object.index];
+            const Sphere sphere = scene.primitives.spheres.data[intersection_object.index];
             data->normal   = sphere.compute_surface_normal(data->intersection);
             data->material = scene.materials.data[sphere.material_index];
             break;
         }
 
         case Triangular: {
-            const Triangle triangle = scene.triangles.data[intersection_object.index];
+            const Triangle triangle = scene.primitives.triangles.data[intersection_object.index];
             data->normal   = triangle.normal;
             data->material = scene.materials.data[triangle.material_index];
             break;
         }
 
         case Boxed: {
-            const Box box = scene.boxes.data[intersection_object.index];
+            const Box box = scene.primitives.boxes.data[intersection_object.index];
             data->normal   = box.compute_surface_normal(data->intersection);
             data->material = scene.materials.data[box.material_index];
             break;
         }
 
         case Cylindrical: {
-            const Cylinder cylinder = scene.cylinders.data[intersection_object.index];
+            const Cylinder cylinder = scene.primitives.cylinders.data[intersection_object.index];
             data->normal   = cylinder.compute_surface_normal(data->intersection);
             data->material = scene.materials.data[cylinder.material_index];
             break;
@@ -188,13 +166,13 @@ __device__ static IntersectionObjectData get_intersection_simple(
 
             for (uint32_t i = start; i < end; i++) {
                 const uint32_t object_index = (uint32_t)scene.bvh.object_indexes.data[i];
-                const Object object = scene.objects.data[object_index];
-                const float d = get_object_distance(ray_origen, ray_direction, object);
+                const Object object = scene.bvh.objects.data[object_index];
+                const float d = object.get_intersection_distance(ray_origen, ray_direction, scene.primitives);
 
                 const bool same_object =
                     (last_hit.closest_object_index != UINT32_MAX) &&
                     (last_hit.closest_object_index == object_index) &&
-                    (scene.objects.data[last_hit.closest_object_index].type == object.type);
+                    (scene.bvh.objects.data[last_hit.closest_object_index].type == object.type);
 
                 if (d > 0.0f && d < best.closest_object_distance && !same_object) {
                     best.closest_object_distance = d;
@@ -293,7 +271,8 @@ __device__ static float3 get_new_direction(float3 N, uint32_t& seed) {
 // -----------------------------------------------------------------------------
 //
 
-__device__ static float3 get_color(Camera camera, float3 ray_origen, float3 ray_direction, uint32_t& seed, uint32_t x, uint32_t y) {
+__device__ static float3 get_color(Camera camera, float3 ray_origen, float3 ray_direction,
+                                   uint32_t& seed, uint32_t x, uint32_t y) {
     (void)x; (void)y;
 
     IntersectionObjectData hit = {};
@@ -301,6 +280,21 @@ __device__ static float3 get_color(Camera camera, float3 ray_origen, float3 ray_
 
     const float3 sky_radiance = {0.0f, 0.0f, 0.0f};
 
+    // -------------------------------------------------------------------------
+    // Frame 0: preview rápido. Un solo rayo, sin path tracing.
+    // -------------------------------------------------------------------------
+    if (camera.saved_frames == 0) {
+        hit = get_intersection_simple(ray_origen, ray_direction, hit);
+
+        if (hit.closest_object_distance == FLT_MAX) {
+            return sky_radiance;
+        }
+        return hit.material.radiance + hit.material.albedo;
+    }
+
+    // -------------------------------------------------------------------------
+    // Frames siguientes: path tracing acumulativo normal.
+    // -------------------------------------------------------------------------
     float3 throughput = make_float3(1.0f, 1.0f, 1.0f);
     float3 emision    = make_float3(0.0f, 0.0f, 0.0f);
 
@@ -315,24 +309,18 @@ __device__ static float3 get_color(Camera camera, float3 ray_origen, float3 ray_
             break;
         }
 
-        // Emisión
         emision = emision + hadamard(hit.material.radiance, throughput);
 
-        // Actualizar throughput (Lambert cosine-weighted)
         throughput = hadamard(throughput, hit.material.albedo);
 
-        // Russian Roulette
         if (i >= rr_start) {
             float p = fmaxf(throughput.x, fmaxf(throughput.y, throughput.z));
             p = fminf(p, 0.95f);
-
             float r = rand01(seed);
             if (r > p) break;
-
             throughput = throughput / p;
         }
 
-        // Nuevo rebote
         ray_direction = get_new_direction(hit.normal, seed);
         ray_origen    = hit.intersection;
     }

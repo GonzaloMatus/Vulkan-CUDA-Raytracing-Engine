@@ -1,4 +1,5 @@
 #include "app/application.h"
+#include <stdio.h>
 
 int main(void) {
     #ifndef NDEBUG

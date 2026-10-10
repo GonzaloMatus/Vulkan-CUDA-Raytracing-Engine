@@ -2,12 +2,15 @@
 #include <stdint.h>
 #include "../fixed_array.h"
 #include "node_gpu.h"
+#include "object.h"
 
 FixedArray(NodeGPU);
 FixedArray(size_t);
+FixedArray(Object);
 
 typedef struct {
-    size_t_array object_indexes;
+    Object_array  objects;       // <-- movido aquí
+    size_t_array  object_indexes;
     NodeGPU_array nodes;
 } BVHGPU;
 

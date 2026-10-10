@@ -11,7 +11,23 @@
 #include "../../compute/compute.h"
 
 bool bvh_gpu_create(BVHGPU* gpu, const BVH* cpu) {
-    // Contar objetos totales en hojas.
+    // --- Objetos ---
+    if (cpu->objects.size > 0) {
+        if (!compute_alloc((void**)&gpu->objects.data,
+                           cpu->objects.size * sizeof(Object))) {
+            return false;
+        }
+        if (!compute_memcpy_to(gpu->objects.data, cpu->objects.data,
+                               cpu->objects.size * sizeof(Object))) {
+            return false;
+        }
+        gpu->objects.size = cpu->objects.size;
+    } else {
+        gpu->objects.data = NULL;
+        gpu->objects.size = 0;
+    }
+
+    // --- Nodos e índices de objetos ---
     size_t total_objects = 0;
     for (size_t i = 0; i < cpu->amount_nodes; i++) {
         total_objects += cpu->nodes[i].object_indexes.size;
@@ -76,4 +92,6 @@ void bvh_gpu_destroy(BVHGPU* gpu) {
     gpu->nodes.size = 0;
     compute_free((void*)gpu->object_indexes.data);
     gpu->object_indexes.size = 0;
+    compute_free((void*)gpu->objects.data);
+    gpu->objects.size = 0;
 }

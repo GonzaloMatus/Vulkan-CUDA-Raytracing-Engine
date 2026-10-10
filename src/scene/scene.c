@@ -95,12 +95,14 @@ bool scene_innit(Scene* scene) {
                                   scene->primitives.triangle_list.size +
                                   scene->primitives.box_list.size +
                                   scene->primitives.cylinder_list.size;
-    scene->object_list = Object_list_create(amount_objects + 100);
 
-    object_list_fill(&scene->object_list, &scene->primitives);
+    // Los objetos ahora viven dentro del BVH.
+    scene->bvh.objects = Object_list_create(amount_objects + 100);
+
+    object_list_fill(&scene->bvh.objects, &scene->primitives);
 
     // La construcción del BVH con 1M de objetos puede tardar unos segundos.
-    bvh_create(&scene->bvh, &scene->object_list);
+    bvh_create(&scene->bvh);
 
     return true;
 }
@@ -108,5 +110,5 @@ bool scene_innit(Scene* scene) {
 void scene_destroy(Scene* scene) {
     Material_list_free(&scene->material_list);
     primitives_destroy(&scene->primitives);
-    // No olvides liberar object_list y bvh si no lo haces ya
+    bvh_destroy(&scene->bvh);   // Libera nodes, object_indexes y objects
 }

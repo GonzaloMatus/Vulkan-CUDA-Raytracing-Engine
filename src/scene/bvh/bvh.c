@@ -9,14 +9,7 @@
 #include "bvh.h"
 #include "../primitives.h"
 
-// Una hoja con más de MAX_OBJECTS_PER_LEAF objetos se subdivide,
-// salvo que ya hayamos alcanzado MAX_DEPTH.
 #define MAX_OBJECTS_PER_LEAF 2
-
-// Profundidad máxima del árbol. Con layout de heap, los índices de los
-// nodos en el nivel d van de 2^d - 1 a 2^(d+1) - 2. Para MAX_DEPTH = 17,
-// el índice máximo es 2^18 - 2 = 262142. La capacidad del array se ajusta
-// a 2^(MAX_DEPTH+1) para que quepa.
 #define MAX_DEPTH 17
 
 typedef struct {
@@ -88,6 +81,19 @@ static float evaluate_sah(SAHEntry* entries, size_t n,
         suffix[i] = aabb_union(suffix[i + 1], entries[i].aabb);
     }
 
+    // Coste del nodo padre sin partir.
+    const float sa_parent = aabb_surface_area(prefix[n - 1]);
+    if (sa_parent <= 0.0f) {
+        // Padre degenerado (AABB plano). Forzar split por la mitad.
+        *out_best_split = n / 2;
+        return FLT_MAX;
+    }
+
+    // Coste de traversal, relativo al SA. Es el término constante que
+    // faltaba: sin él, SAH siempre parte, produciendo árboles muy profundos
+    // con hojas cuyo AABB no aporta pruning.
+    const float traverse_cost = 1.0f;
+
     float best_cost = FLT_MAX;
     size_t best_split = 0;
 
@@ -96,7 +102,9 @@ static float evaluate_sah(SAHEntry* entries, size_t n,
         const float sa_r = aabb_surface_area(suffix[i + 1]);
         const size_t n_l = i + 1;
         const size_t n_r = n - n_l;
-        const float cost = sa_l * (float)n_l + sa_r * (float)n_r;
+        // Coste normalizado por SA_parent + coste de traversal.
+        const float cost = traverse_cost +
+                           (sa_l * (float)n_l + sa_r * (float)n_r) / sa_parent;
         if (cost < best_cost) {
             best_cost = cost;
             best_split = n_l;
@@ -139,13 +147,11 @@ static void build_sah_recursive(
         bvh->amount_nodes = node_index + 1;
     }
 
-    // Caso base: hoja. También cuando llegamos al límite de profundidad.
     if (count <= MAX_OBJECTS_PER_LEAF || depth >= MAX_DEPTH) {
         make_leaf(node, entries, count);
         return;
     }
 
-    // Evaluar los tres ejes.
     float  best_cost  = FLT_MAX;
     size_t best_split = 0;
 
@@ -168,13 +174,11 @@ static void build_sah_recursive(
         }
     }
 
-    // Sin split útil: hoja.
     if (best_split == 0 || best_split >= count) {
         make_leaf(node, entries, count);
         return;
     }
 
-    // Recursión.
     build_sah_recursive(bvh, 2 * node_index + 1,
                         entries, best_split,
                         scratch, prefix, suffix,
@@ -185,17 +189,14 @@ static void build_sah_recursive(
                         node_capacity, depth + 1);
 }
 
-void bvh_create(BVH* bvh, const Object_list* object_list) {
-    const size_t N = object_list->size;
+void bvh_create(BVH* bvh) {
+    const size_t N = bvh->objects.size;
     if (N == 0) {
         bvh->nodes = NULL;
         bvh->amount_nodes = 0;
         return;
     }
 
-    // Capacidad que cabe hasta MAX_DEPTH en heap layout.
-    // Nivel d usa índices hasta 2^(d+1) - 2. Para d = MAX_DEPTH, eso es
-    // 2^(MAX_DEPTH+1) - 2, así que reservamos 2^(MAX_DEPTH+1).
     const size_t node_capacity = (size_t)1 << (MAX_DEPTH + 1);
 
     bvh->nodes = calloc(node_capacity, sizeof(Node));
@@ -207,7 +208,7 @@ void bvh_create(BVH* bvh, const Object_list* object_list) {
     AABB* suffix      = malloc(N * sizeof(AABB));
 
     for (size_t i = 0; i < N; i++) {
-        const Object* obj = &object_list->data[i];
+        const Object* obj = &bvh->objects.data[i];
         entries[i].aabb         = obj->aabb;
         entries[i].object_index = i;
         entries[i].centroid.x = (obj->aabb.A.x + obj->aabb.B.x) * 0.5f;
@@ -226,4 +227,22 @@ void bvh_create(BVH* bvh, const Object_list* object_list) {
 
     printf("BVH built with SAH: %zu nodes for %zu objects\n",
            bvh->amount_nodes, N);
+}
+
+void bvh_destroy(BVH* bvh) {
+    if (bvh->nodes) {
+        for (size_t i = 0; i < bvh->amount_nodes; i++) {
+            if (bvh->nodes[i].object_indexes.data) {
+                size_t_list_free(&bvh->nodes[i].object_indexes);
+            }
+        }
+        free(bvh->nodes);
+        bvh->nodes = NULL;
+    }
+    if (bvh->objects.data) {
+        free(bvh->objects.data);
+        bvh->objects.data = NULL;
+        bvh->objects.size = 0;
+    }
+    bvh->amount_nodes = 0;
 }

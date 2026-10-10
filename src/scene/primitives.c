@@ -1,5 +1,6 @@
 #include "primitives.h"
 #include <math.h>
+#include <stdio.h>
 
 static inline void push_triangle(Primitives* primitives, float3 a, float3 b, float3 c, int material_index) {
     Triangle t;
@@ -49,24 +50,7 @@ void add_box(Primitives* primitives, float3 c, float3 s) {
         push_triangle(primitives, v[f[i][0]], v[f[i][1]], v[f[i][2]], 3);
 }
 
-void add_person(Primitives* primitives, float3 p) {
-    Sphere head;
 
-    // Piernas
-    add_box(primitives, (float3){p.x - 0.35f, p.y, 1.0f}, (float3){0.2f, 0.2f, 1.0f});
-    add_box(primitives, (float3){p.x + 0.35f, p.y, 1.0f}, (float3){0.2f, 0.2f, 1.0f});
-
-    // Torso
-    add_box(primitives, (float3){p.x, p.y, 2.6f}, (float3){0.6f, 0.3f, 0.8f});
-
-    // Brazos
-    add_box(primitives, (float3){p.x - 1.0f, p.y, 2.6f}, (float3){0.4f, 0.15f, 0.15f});
-    add_box(primitives, (float3){p.x + 1.0f, p.y, 2.6f}, (float3){0.4f, 0.15f, 0.15f});
-
-    // Cabeza (esfera)
-    sphere_create(&head, p.x, p.y, 3.9f, 0.35f, 2);
-    Sphere_list_push(&primitives->sphere_list, head);
-}
 
 void add_cube(Primitives* primitives, float3 center, float size) {
     float s = size * 0.5f;
@@ -140,30 +124,117 @@ void add_sphere_grid(Primitives* primitives, int grid_size, float spacing, float
     }
 }
 
+// -----------------------------------------------------------------------------
+// Icosphere: esfera generada proceduralmente a base de triángulos.
+//
+// Empieza con un icosaedro (20 triángulos, 12 vértices) y subdivide cada
+// triángulo en 4 recursivamente. Cada nuevo vértice se proyecta a la esfera.
+//
+// Triangle count = 20 * 4^subdivisions
+//   subdivisions = 0  →    20 triángulos (icosaedro)
+//   subdivisions = 1  →    80 triángulos
+//   subdivisions = 2  →   320 triángulos
+//   subdivisions = 3  →  1280 triángulos
+//   subdivisions = 4  →  5120 triángulos
+//   subdivisions = 5  → 20480 triángulos
+// -----------------------------------------------------------------------------
+
+typedef struct { float3 a, b, c; } IcosphereTri;
+
+static void add_icosphere(Primitives* primitives, float3 center, float radius,
+                          int subdivisions, int material_index)
+{
+    // Proporción áurea.
+    const float t = (1.0f + sqrtf(5.0f)) * 0.5f;
+    const float inv_len = 1.0f / sqrtf(1.0f + t * t);
+
+    // 12 vértices del icosaedro base.
+    float3 base[12] = {
+        {-1,  t,  0}, { 1,  t,  0}, {-1, -t,  0}, { 1, -t,  0},
+        { 0, -1,  t}, { 0,  1,  t}, { 0, -1, -t}, { 0,  1, -t},
+        { t,  0, -1}, { t,  0,  1}, {-t,  0, -1}, {-t,  0,  1}
+    };
+    for (int i = 0; i < 12; i++) {
+        base[i] = multiply(base[i], inv_len);
+    }
+
+    // 20 caras del icosaedro.
+    static const int faces[20][3] = {
+        { 0, 11,  5}, { 0,  5,  1}, { 0,  1,  7}, { 0,  7, 10}, { 0, 10, 11},
+        { 1,  5,  9}, { 5, 11,  4}, {11, 10,  2}, {10,  7,  6}, { 7,  1,  8},
+        { 3,  9,  4}, { 3,  4,  2}, { 3,  2,  6}, { 3,  6,  8}, { 3,  8,  9},
+        { 4,  9,  5}, { 2,  4, 11}, { 6,  2, 10}, { 8,  6,  7}, { 9,  8,  1}
+    };
+
+    // Triángulos actuales. Empiezan siendo las 20 caras del icosaedro.
+    size_t tri_capacity = 20u * (size_t)(1u << (2 * subdivisions));
+    IcosphereTri* tris = malloc(tri_capacity * sizeof(IcosphereTri));
+    size_t tri_count = 0;
+
+    for (int i = 0; i < 20; i++) {
+        tris[tri_count++] = (IcosphereTri){
+            base[faces[i][0]],
+            base[faces[i][1]],
+            base[faces[i][2]]
+        };
+    }
+
+    // Subdividir recursivamente.
+    for (int s = 0; s < subdivisions; s++) {
+        IcosphereTri* new_tris = malloc(tri_count * 4 * sizeof(IcosphereTri));
+        size_t new_count = 0;
+
+        for (size_t i = 0; i < tri_count; i++) {
+            const IcosphereTri tri = tris[i];
+
+            // Puntos medios, proyectados a la esfera unitaria.
+            const float3 ab = normalized(add(tri.a, tri.b));
+            const float3 bc = normalized(add(tri.b, tri.c));
+            const float3 ca = normalized(add(tri.c, tri.a));
+
+            new_tris[new_count++] = (IcosphereTri){ tri.a, ab, ca };
+            new_tris[new_count++] = (IcosphereTri){ tri.b, bc, ab };
+            new_tris[new_count++] = (IcosphereTri){ tri.c, ca, bc };
+            new_tris[new_count++] = (IcosphereTri){ ab,    bc, ca };
+        }
+
+        free(tris);
+        tris = new_tris;
+        tri_count = new_count;
+    }
+
+    // Emitir todos los triángulos escalados y trasladados.
+    for (size_t i = 0; i < tri_count; i++) {
+        const float3 a = add(center, multiply(tris[i].a, radius));
+        const float3 b = add(center, multiply(tris[i].b, radius));
+        const float3 c = add(center, multiply(tris[i].c, radius));
+        push_triangle(primitives, a, b, c, material_index);
+    }
+
+    free(tris);
+
+    printf("Icosphere: %zu triangles (%d subdivisions, radius %.1f)\n",
+           tri_count, subdivisions, radius);
+}
+
 void load_primitives(Primitives* primitives) {
-    // -------------------------------------------------------------------------
-    // ESCENA PROCEDURAL: 1,000,000 de esferas (100x100x100)
-    // -------------------------------------------------------------------------
-    // Ajusta GRID_SIZE para más o menos objetos:
-    //   GRID_SIZE = 100  -> 1,000,000 esferas
-    //   GRID_SIZE = 50   ->   125,000 esferas
-    //   GRID_SIZE = 200  -> 8,000,000 esferas (¡cuidado con la memoria!)
     const int GRID_SIZE = 30;
     const float SPACING = 10.0f;
     const float RADIUS  = 0.4f;
 
     add_sphere_grid(primitives, GRID_SIZE, SPACING, RADIUS);
 
-    // -------------------------------------------------------------------------
-    // Objetos adicionales (opcionales, para referencia visual)
-    // -------------------------------------------------------------------------
-    // Una luz puntual en el centro, por encima de la cuadrícula
     Sphere light;
-    sphere_create(&light, 0, 0, (float)GRID_SIZE * SPACING * 0.8f, 20.0f, 6); // material emisivo
+    sphere_create(&light, 0, 0, (float)GRID_SIZE * SPACING * 0.8f, 20.0f, 6);
     Sphere_list_push(&primitives->sphere_list, light);
 
-    // Un suelo grande debajo de la cuadrícula
     add_floor(primitives, -(float)GRID_SIZE * SPACING * 0.8f, (float)GRID_SIZE * SPACING * 2.0f, 0);
+
+    // NUEVO: un par de icospheres para probar el pipeline de triángulos.
+    // 3 subdivisiones = 1280 triángulos cada uno.
+    add_icosphere(primitives, (float3){  50.0f, 0.0f, 0.0f }, 30.0f, 3, 1);  // Red
+    add_icosphere(primitives, (float3){ -50.0f, 0.0f, 0.0f }, 30.0f, 4, 2);  // Green
+    add_icosphere(primitives, (float3){   0.0f, 50.0f, 50.0f }, 20.0f, 2, 4); // Blue
 }
 
 bool primitives_innit(Primitives* primitives) {

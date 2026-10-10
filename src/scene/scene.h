@@ -8,9 +8,8 @@ DynamicArray(Material);
 
 typedef struct {
     Material_list material_list;
-    Primitives primitives;
-    Object_list object_list;
-    BVH bvh;
+    Primitives    primitives;
+    BVH           bvh;    // objects ahora vive dentro
 } Scene;
 
 bool scene_innit(Scene* scene);

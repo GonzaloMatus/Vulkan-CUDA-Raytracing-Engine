@@ -3,28 +3,18 @@
 #include <stdbool.h>
 #include "scene.h"
 #include "../vector/float3.h"
-#include "sphere/sphere.h"
 #include "fixed_array.h"
+#include "material/material.h"
+#include "primitives_gpu.h"
 #include "bvh/bvh_gpu.h"
 
 FixedArray(Material);
-FixedArray(Box);
-FixedArray(Sphere);
-FixedArray(Triangle);
-FixedArray(Cylinder);
-FixedArray(Object);
 
 typedef struct {
     Material_array materials;
-    Object_array objects;
-    BVHGPU bvh;
-
-    Sphere_array spheres;
-    Triangle_array triangles;
-    Box_array boxes;
-    Cylinder_array cylinders;
-
-    bool is_dirty;
+    PrimitivesGPU  primitives;
+    BVHGPU         bvh;
+    bool           is_dirty;
 } SceneGPU;
 
 bool scene_gpu_create(SceneGPU* gpu, const Scene* cpu);

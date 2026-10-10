@@ -125,43 +125,46 @@ void raytracer_render(Raytracer* rt, uint32_t frame_index,
     MetalBackend* be = rt->backend_state;
     if (!be) return;
 
+    // Recuperar el MTLBuffer detrás de cada puntero del SceneGPU.
+    // objects ahora vive dentro del BVH.
+    id<MTLBuffer> buf_objects     = (__bridge id<MTLBuffer>)compute_get_native_buffer(scene->bvh.objects.data);
     id<MTLBuffer> buf_materials   = (__bridge id<MTLBuffer>)compute_get_native_buffer(scene->materials.data);
-    id<MTLBuffer> buf_objects     = (__bridge id<MTLBuffer>)compute_get_native_buffer(scene->objects.data);
     id<MTLBuffer> buf_bvh_obj_idx = (__bridge id<MTLBuffer>)compute_get_native_buffer(scene->bvh.object_indexes.data);
     id<MTLBuffer> buf_bvh_nodes   = (__bridge id<MTLBuffer>)compute_get_native_buffer(scene->bvh.nodes.data);
-    id<MTLBuffer> buf_spheres     = (__bridge id<MTLBuffer>)compute_get_native_buffer(scene->spheres.data);
-    id<MTLBuffer> buf_triangles   = (__bridge id<MTLBuffer>)compute_get_native_buffer(scene->triangles.data);
-    id<MTLBuffer> buf_boxes       = (__bridge id<MTLBuffer>)compute_get_native_buffer(scene->boxes.data);
-    id<MTLBuffer> buf_cylinders   = (__bridge id<MTLBuffer>)compute_get_native_buffer(scene->cylinders.data);
+    // Las primitivas ahora viven dentro de primitives.
+    id<MTLBuffer> buf_spheres     = (__bridge id<MTLBuffer>)compute_get_native_buffer(scene->primitives.spheres.data);
+    id<MTLBuffer> buf_triangles   = (__bridge id<MTLBuffer>)compute_get_native_buffer(scene->primitives.triangles.data);
+    id<MTLBuffer> buf_boxes       = (__bridge id<MTLBuffer>)compute_get_native_buffer(scene->primitives.boxes.data);
+    id<MTLBuffer> buf_cylinders   = (__bridge id<MTLBuffer>)compute_get_native_buffer(scene->primitives.cylinders.data);
 
     SceneCounts counts = {
         .materials_size           = scene->materials.size,
-        .objects_size             = scene->objects.size,
+        .objects_size             = scene->bvh.objects.size,
         .bvh_object_indexes_size  = scene->bvh.object_indexes.size,
         .bvh_nodes_size           = scene->bvh.nodes.size,
-        .spheres_size             = scene->spheres.size,
-        .triangles_size           = scene->triangles.size,
-        .boxes_size               = scene->boxes.size,
-        .cylinders_size           = scene->cylinders.size,
+        .spheres_size             = scene->primitives.spheres.size,
+        .triangles_size           = scene->primitives.triangles.size,
+        .boxes_size               = scene->primitives.boxes.size,
+        .cylinders_size           = scene->primitives.cylinders.size,
     };
 
     id<MTLCommandBuffer> cb = [be->queue commandBuffer];
     id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
 
     [enc setComputePipelineState:be->pipeline];
-    [enc setBuffer:be->output        offset:0 atIndex:0];
+    [enc setBuffer:be->output       offset:0 atIndex:0];
     [enc setBytes:camera length:sizeof(Camera) atIndex:1];
     [enc setBytes:&frame_index length:sizeof(frame_index) atIndex:2];
-    [enc setBuffer:buf_materials     offset:0 atIndex:3];
-    [enc setBuffer:buf_objects       offset:0 atIndex:4];
-    [enc setBuffer:buf_bvh_obj_idx   offset:0 atIndex:5];
-    [enc setBuffer:buf_bvh_nodes     offset:0 atIndex:6];
-    [enc setBuffer:buf_spheres       offset:0 atIndex:7];
-    [enc setBuffer:buf_triangles     offset:0 atIndex:8];
-    [enc setBuffer:buf_boxes         offset:0 atIndex:9];
-    [enc setBuffer:buf_cylinders     offset:0 atIndex:10];
+    [enc setBuffer:buf_materials    offset:0 atIndex:3];
+    [enc setBuffer:buf_objects      offset:0 atIndex:4];
+    [enc setBuffer:buf_bvh_obj_idx  offset:0 atIndex:5];
+    [enc setBuffer:buf_bvh_nodes    offset:0 atIndex:6];
+    [enc setBuffer:buf_spheres      offset:0 atIndex:7];
+    [enc setBuffer:buf_triangles    offset:0 atIndex:8];
+    [enc setBuffer:buf_boxes        offset:0 atIndex:9];
+    [enc setBuffer:buf_cylinders    offset:0 atIndex:10];
     [enc setBytes:&counts length:sizeof(counts) atIndex:11];
-    [enc setBuffer:be->accumulation  offset:0 atIndex:12];
+    [enc setBuffer:be->accumulation offset:0 atIndex:12];
 
     const NSUInteger tw = 32;
     const NSUInteger th = 8;

@@ -165,27 +165,35 @@ inline float aabb_intersect(AABB aabb, float3 ro, float3 rd) {
     const float3 A = f3(aabb.A);
     const float3 B = f3(aabb.B);
 
-    float t_low  = -FLT_MAX_METAL;
-    float t_high =  FLT_MAX_METAL;
+    // Protección contra NaN: si rd es 0 y el AABB es plano en ese eje,
+    // 0/0 daría NaN y el slab se descartaría silenciosamente.
+    const float3 safe_rd = float3(
+        copysign(fmax(fabs(rd.x), 1e-20f), rd.x),
+        copysign(fmax(fabs(rd.y), 1e-20f), rd.y),
+        copysign(fmax(fabs(rd.z), 1e-20f), rd.z)
+    );
+    const float3 inv_rd = 1.0f / safe_rd;
 
-    const float tx_low  = ((rd.x >= 0.0f ? A.x : B.x) - ro.x) / rd.x;
-    const float tx_high = ((rd.x >= 0.0f ? B.x : A.x) - ro.x) / rd.x;
-    t_low  = fmax(t_low,  tx_low);
-    t_high = fmin(t_high, tx_high);
+    const float3 t0 = (A - ro) * inv_rd;
+    const float3 t1 = (B - ro) * inv_rd;
 
-    const float ty_low  = ((rd.y >= 0.0f ? A.y : B.y) - ro.y) / rd.y;
-    const float ty_high = ((rd.y >= 0.0f ? B.y : A.y) - ro.y) / rd.y;
-    t_low  = fmax(t_low,  ty_low);
-    t_high = fmin(t_high, ty_high);
+    const float3 tmin = fmin(t0, t1);
+    const float3 tmax = fmax(t0, t1);
 
-    const float tz_low  = ((rd.z >= 0.0f ? A.z : B.z) - ro.z) / rd.z;
-    const float tz_high = ((rd.z >= 0.0f ? B.z : A.z) - ro.z) / rd.z;
-    t_low  = fmax(t_low,  tz_low);
-    t_high = fmin(t_high, tz_high);
+    const float t_enter = fmax(fmax(tmin.x, tmin.y), tmin.z);
+    const float t_exit  = fmin(fmin(tmax.x, tmax.y), tmax.z);
 
-    if (t_low > t_high) return -FLT_MAX_METAL;
-    if (t_low >= 0.0f)  return t_low;
-    return t_high;
+    // Sin intersección.
+    if (t_enter > t_exit) return -FLT_MAX_METAL;
+
+    // AABB completamente detrás del rayo.
+    if (t_exit < 0.0f) return -FLT_MAX_METAL;
+
+    // Rayo empieza dentro del AABB: devolvemos 0 (distancia mínima).
+    if (t_enter < 0.0f) return 0.0f;
+
+    // Rayo entra desde afuera.
+    return t_enter;
 }
 
 inline bool aabb_has_inside(AABB aabb, float3 p) {
@@ -467,7 +475,7 @@ inline float3 get_new_direction(float3 N, thread uint32_t& seed) {
 
 // Traversal simple con stack de enteros. Sin pruning exacto.
 // Corta cuando el AABB de un nodo está más lejos que el mejor hit actual.
-inline HitData get_intersection_simple(
+inline HitData get_intersection(
     device Object*   objects,
     device Material* materials,
     device Sphere*   spheres,
@@ -584,6 +592,26 @@ inline float3 get_color(
 
     const float3 sky_radiance = float3(0.0f, 0.0f, 0.0f);
 
+    // -------------------------------------------------------------------------
+    // Frame 0: preview rápido. Un solo rayo, sin path tracing.
+    // Da una imagen limpia (sin ruido) al instante, que el path tracer
+    // irá refinando en los frames siguientes.
+    // -------------------------------------------------------------------------
+    if (camera.saved_frames == 0) {
+        hit = get_intersection(
+            objects, materials, spheres, triangles, boxes, cylinders,
+            bvh_object_indexes, bvh_nodes, bvh_nodes_size,
+            ro, rd, (ulong)-1);
+
+        if (hit.distance == FLT_MAX_METAL) {
+            return sky_radiance;
+        }
+        return f3(hit.material.radiance) + f3(hit.material.albedo);
+    }
+
+    // -------------------------------------------------------------------------
+    // Frames siguientes: path tracing acumulativo normal.
+    // -------------------------------------------------------------------------
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
     float3 emission   = float3(0.0f, 0.0f, 0.0f);
 
@@ -593,7 +621,7 @@ inline float3 get_color(
     ulong last_hit_index = (ulong)-1;
 
     for (int i = 0; i < max_bounces; i++) {
-        hit = get_intersection_simple(
+        hit = get_intersection(
             objects, materials, spheres, triangles, boxes, cylinders,
             bvh_object_indexes, bvh_nodes, bvh_nodes_size,
             ro, rd, last_hit_index);
@@ -605,7 +633,7 @@ inline float3 get_color(
 
         last_hit_index = hit.object_index;
 
-        emission += f3(hit.material.radiance) * throughput;
+        emission   += f3(hit.material.radiance) * throughput;
         throughput *= f3(hit.material.albedo);
 
         if (i >= rr_start) {

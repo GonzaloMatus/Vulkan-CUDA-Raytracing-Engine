@@ -13,35 +13,45 @@ typedef struct aabb {
 #ifdef __cplusplus
 
     __device__ __forceinline__ float get_intersection_distance(const float3 ray_origin, const float3 ray_direction) const {
+        const float3 safe_rd = make_float3(
+            copysignf(fmaxf(fabsf(ray_direction.x), 1e-20f), ray_direction.x),
+            copysignf(fmaxf(fabsf(ray_direction.y), 1e-20f), ray_direction.y),
+            copysignf(fmaxf(fabsf(ray_direction.z), 1e-20f), ray_direction.z)
+        );
+        const float3 inv_rd = make_float3(
+            1.0f / safe_rd.x,
+            1.0f / safe_rd.y,
+            1.0f / safe_rd.z
+        );
 
-        float t_low = -FLT_MAX;
-        float t_high = FLT_MAX;
+        const float3 t0 = (A - ray_origin) * inv_rd;
+        const float3 t1 = (B - ray_origin) * inv_rd;
 
-        // ----- X slab -----
-        const float tx_low  = ((ray_direction.x >= 0.0f ? A.x : B.x) - ray_origin.x) / ray_direction.x;
-        const float tx_high = ((ray_direction.x >= 0.0f ? B.x : A.x) - ray_origin.x) / ray_direction.x;
-        t_low = fmaxf(t_low, tx_low);
-        t_high = fminf(t_high, tx_high);
-        
-        // ----- Y slab -----
-        const float ty_low  = ((ray_direction.y >= 0.0f ? A.y : B.y) - ray_origin.y) / ray_direction.y;
-        const float ty_high = ((ray_direction.y >= 0.0f ? B.y : A.y) - ray_origin.y) / ray_direction.y;
-        t_low = fmaxf(t_low, ty_low);
-        t_high = fminf(t_high, ty_high);
+        const float3 tmin = make_float3(
+            fminf(t0.x, t1.x),
+            fminf(t0.y, t1.y),
+            fminf(t0.z, t1.z)
+        );
+        const float3 tmax = make_float3(
+            fmaxf(t0.x, t1.x),
+            fmaxf(t0.y, t1.y),
+            fmaxf(t0.z, t1.z)
+        );
 
-        // ----- Z slab -----
-        const float tz_low  = ((ray_direction.z >= 0.0f ? A.z : B.z) - ray_origin.z) / ray_direction.z;
-        const float tz_high = ((ray_direction.z >= 0.0f ? B.z : A.z) - ray_origin.z) / ray_direction.z;
-        t_low = fmaxf(t_low, tz_low);
-        t_high = fminf(t_high, tz_high);
+        const float t_enter = fmaxf(fmaxf(tmin.x, tmin.y), tmin.z);
+        const float t_exit  = fminf(fminf(tmax.x, tmax.y), tmax.z);
 
-        if (t_low > t_high)
-            return -FLT_MAX;
+        // Sin intersección.
+        if (t_enter > t_exit) return -FLT_MAX;
 
-        if (t_low >= 0.0f)
-            return t_low;
+        // AABB completamente detrás del rayo.
+        if (t_exit < 0.0f) return -FLT_MAX;
 
-        return t_high;
+        // Rayo empieza dentro del AABB.
+        if (t_enter < 0.0f) return 0.0f;
+
+        // Rayo entra desde afuera.
+        return t_enter;
     }
 
     __device__ __forceinline__ float3 compute_surface_normal(float3 p) const {

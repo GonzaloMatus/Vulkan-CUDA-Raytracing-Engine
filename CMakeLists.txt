@@ -82,6 +82,7 @@ set(ENGINE_SOURCES
     src/scene/bvh/bvh.c
     src/scene/aabb/aabb.c
     src/scene/primitives.c
+    src/scene/primitives_gpu.c
     src/scene/bvh/bvh_gpu.c
     src/scene/bvh/node_gpu.c
 )
