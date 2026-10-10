@@ -36,15 +36,15 @@ void set_materials(Scene* scene) {
     material_create(&material, albedo, radiance);
     Material_list_push(&scene->material_list, material);
 
-    // White Light
+    // White
     albedo = (float3) {0.9f, 0.9f, 0.9f};
-    radiance = (float3) {20.0f, 20.0f, 20.0f};
+    radiance = (float3) {0.0f, 0.0f, 0.0f};
     material_create(&material, albedo, radiance);
     Material_list_push(&scene->material_list, material);
 
     // Yellowish with Yellow Light
     albedo = (float3) {0.9f, 0.8f, 0.1f};
-    radiance = (float3) {8.0f, 4.0f, 2.0f};
+    radiance = (float3) {32.0f, 16.0f, 8.0f};
     material_create(&material, albedo, radiance);
     Material_list_push(&scene->material_list, material);
 

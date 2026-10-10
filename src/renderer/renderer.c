@@ -16,6 +16,8 @@
 #include "../scene/scene_gpu.h"
 
 void renderer_init(Renderer* renderer, Window* window) {
+    memset(renderer, 0, sizeof(*renderer));
+    
     renderer->window = window;
     renderer->frame_index = 0;
 

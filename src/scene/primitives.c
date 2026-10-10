@@ -130,7 +130,7 @@ void add_sphere_grid(Primitives* primitives, int grid_size, float spacing, float
 
                 // Variar ligeramente el radio y el material para dar variedad
                 float r = radius * (0.8f + 0.4f * ((i + j + k) % 5) / 4.0f);
-                int mat = (i * 7 + j * 13 + k * 23) % 9; // 9 materiales disponibles
+                int mat = (i * 7 + j * 13 + k * 23) % 6; // 9 materiales disponibles
 
                 Sphere sphere;
                 sphere_create(&sphere, x, y, z, r, mat);
@@ -159,7 +159,7 @@ void load_primitives(Primitives* primitives) {
     // -------------------------------------------------------------------------
     // Una luz puntual en el centro, por encima de la cuadrícula
     Sphere light;
-    sphere_create(&light, 0, 0, (float)GRID_SIZE * SPACING * 0.8f, 5.0f, 6); // material emisivo
+    sphere_create(&light, 0, 0, (float)GRID_SIZE * SPACING * 0.8f, 20.0f, 6); // material emisivo
     Sphere_list_push(&primitives->sphere_list, light);
 
     // Un suelo grande debajo de la cuadrícula

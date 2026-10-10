@@ -124,8 +124,12 @@ static bool vk_create_instance(VulkanContext* ctx) {
     create_info.enabledLayerCount = 0;
 #endif
 
+#ifdef __APPLE__
     printf("[vk] Using driver: %s\n",
            vk_platform_is_kosmickrisp() ? "KosmicKrisp" : "MoltenVK");
+#else
+    printf("[vk] Using driver: Native Vulkan\n");
+#endif
 
     VkResult res = vkCreateInstance(&create_info, NULL, &ctx->instance);
     if (res != VK_SUCCESS) {

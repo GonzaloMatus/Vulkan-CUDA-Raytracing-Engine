@@ -93,6 +93,8 @@ static void free_swapchain_support(SwapchainSupport* support) {
 bool swapchain_create(Swapchain* swapchain, const VulkanContext* ctx,
                       uint32_t width, uint32_t height,
                       VkSwapchainKHR old_swapchain) {
+    memset(swapchain, 0, sizeof(*swapchain));
+    
     SwapchainSupport support;
     if (!query_swapchain_support(ctx->physical_device, ctx->surface, &support)) {
         fprintf(stderr, "Swapchain not supported\n");

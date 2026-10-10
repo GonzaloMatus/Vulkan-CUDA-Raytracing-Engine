@@ -17,7 +17,7 @@ bool raytracer_create(Raytracer* rt, void* native_buffer, size_t size,
     rt->height        = height;
     rt->native_buffer = native_buffer;
 
-    CudaBackend* be = calloc(1, sizeof(CudaBackend));
+    CudaBackend* be = (CudaBackend*)calloc(1, sizeof(CudaBackend));
     if (!be) return false;
 
     if (!cuda_import_external_memory_win32(&be->external_memory, native_buffer, size)) {
@@ -46,7 +46,7 @@ bool raytracer_create(Raytracer* rt, void* native_buffer, size_t size,
 
 void raytracer_render(Raytracer* rt, uint32_t frame_index,
                       const Camera* camera, const SceneGPU* scene) {
-    CudaBackend* be = rt->backend_state;
+    CudaBackend* be = (CudaBackend*)rt->backend_state;
     execute_raygen_kernel(be->device_ptr, be->accumulation_buffer,
                           rt->width, rt->height,
                           frame_index, camera, scene);
@@ -58,7 +58,7 @@ void raytracer_sync(Raytracer* rt) {
 }
 
 void raytracer_destroy(Raytracer* rt) {
-    CudaBackend* be = rt->backend_state;
+    CudaBackend* be = (CudaBackend*)rt->backend_state;
     if (!be) return;
 
     if (be->external_memory.handle) cuda_external_memory_destroy(&be->external_memory);

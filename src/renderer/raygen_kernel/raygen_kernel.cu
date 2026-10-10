@@ -4,6 +4,7 @@
 #include <cuda_fp16.h>
 #include <math.h>
 #include <float.h>
+#include <stdint.h>
 
 #include "../../vector/float3.h"
 #include "../../camera/camera.h"
@@ -159,12 +160,6 @@ __device__ static void add_object_information(IntersectionObjectData* data, cons
 // Traversal simple con pruning por best-hit.
 // Equivalente al get_intersection_simple de Metal.
 //
-// - Stack de ints.
-// - Detección de hoja: node.amount_objects > 0.
-// - El "same_object" chequea contra el hit anterior para evitar
-//   auto-intersección en el path tracing (los rayos secundarios
-//   no deben golpear el mismo objeto del que salieron).
-//
 __device__ static IntersectionObjectData get_intersection_simple(
     const float3 ray_origen,
     const float3 ray_direction,
@@ -172,7 +167,7 @@ __device__ static IntersectionObjectData get_intersection_simple(
 {
     IntersectionObjectData best;
     best.closest_object_distance = FLT_MAX;
-    best.closest_object_index    = SIZE_MAX;
+    best.closest_object_index    = UINT32_MAX;
 
     const int STACK_SIZE = 64;
     int stack[STACK_SIZE];
@@ -197,7 +192,7 @@ __device__ static IntersectionObjectData get_intersection_simple(
                 const float d = get_object_distance(ray_origen, ray_direction, object);
 
                 const bool same_object =
-                    (last_hit.closest_object_index != SIZE_MAX) &&
+                    (last_hit.closest_object_index != UINT32_MAX) &&
                     (last_hit.closest_object_index == object_index) &&
                     (scene.objects.data[last_hit.closest_object_index].type == object.type);
 
@@ -302,9 +297,9 @@ __device__ static float3 get_color(Camera camera, float3 ray_origen, float3 ray_
     (void)x; (void)y;
 
     IntersectionObjectData hit = {};
-    hit.closest_object_index = SIZE_MAX;
+    hit.closest_object_index = UINT32_MAX;
 
-    const float3 sky_radiance = {1.0f, 1.0f, 1.0f};
+    const float3 sky_radiance = {0.0f, 0.0f, 0.0f};
 
     float3 throughput = make_float3(1.0f, 1.0f, 1.0f);
     float3 emision    = make_float3(0.0f, 0.0f, 0.0f);
