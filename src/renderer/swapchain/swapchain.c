@@ -44,12 +44,33 @@ static bool query_swapchain_support(VkPhysicalDevice physical_device, VkSurfaceK
 
 
 static VkSurfaceFormatKHR choose_surface_format(const SwapchainSupport* support) {
+    // 1. Preferir explícitamente formatos SRGB para que el driver
+    //    aplique la codificación gamma final (evita doble codificación).
+    //    En macOS CoreAnimation usa B8G8R8A8_SRGB por defecto.
     for (uint32_t i = 0; i < support->format_count; i++) {
-        if (support->formats[i].format == VK_FORMAT_R8G8B8A8_UNORM &&
-            support->formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+        if (support->formats[i].format == VK_FORMAT_B8G8R8A8_SRGB) {
             return support->formats[i];
         }
     }
+    for (uint32_t i = 0; i < support->format_count; i++) {
+        if (support->formats[i].format == VK_FORMAT_R8G8B8A8_SRGB) {
+            return support->formats[i];
+        }
+    }
+
+    // 2. Si no hay SRGB, probar con UNORM (se verá oscuro, pero compila).
+    for (uint32_t i = 0; i < support->format_count; i++) {
+        if (support->formats[i].format == VK_FORMAT_B8G8R8A8_UNORM) {
+            return support->formats[i];
+        }
+    }
+    for (uint32_t i = 0; i < support->format_count; i++) {
+        if (support->formats[i].format == VK_FORMAT_R8G8B8A8_UNORM) {
+            return support->formats[i];
+        }
+    }
+
+    // 3. Último recurso: lo que ofrezca el driver.
     return support->formats[0];
 }
 
@@ -103,6 +124,7 @@ bool swapchain_create(Swapchain* swapchain, const VulkanContext* ctx,
     }
 
     VkSurfaceFormatKHR format = choose_surface_format(&support);
+    printf("[swapchain] format=%d colorspace=%d\n", (int)format.format, (int)format.colorSpace);
     VkPresentModeKHR present_mode = choose_present_mode(&support);
     VkExtent2D extent = choose_extent(&support.capabilities, width, height);
 
