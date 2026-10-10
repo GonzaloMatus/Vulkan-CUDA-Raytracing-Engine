@@ -8,14 +8,6 @@ constant float FLT_MAX_METAL = 3.402823466e+38f;
 
 // -----------------------------------------------------------------------------
 // Structs compatibles byte a byte con C.
-//
-// C usa float3 = {float x,y,z} (12 bytes, alineado a 4).
-// MSL usa float3 = 16 bytes, alineado a 16. Usamos packed_float3 (12 bytes,
-// alineado a 4) para que el layout coincida exactamente.
-//
-// En Metal los punteros no son válidos dentro de un struct device/constant.
-// Por eso el SceneGPU de C (que contiene punteros) no se puede pasar tal cual:
-// cada array se pasa como un buffer independiente ([[buffer(N)]]).
 // -----------------------------------------------------------------------------
 
 struct AABB {
@@ -82,9 +74,10 @@ struct Camera {
     packed_float3 right;
     packed_float3 up;
     int           x, y;
+    uint          max_bounces;
+    uint          rr_start;
 };
 
-// Espejo de los counts del SceneGPU. Los arrays se pasan como buffers.
 struct SceneCounts {
     ulong materials_size;
     ulong objects_size;
@@ -96,7 +89,7 @@ struct SceneCounts {
     ulong cylinders_size;
 };
 
-// Verificación de layout (falla en compilación si algo no coincide).
+// Verificación de layout.
 static_assert(sizeof(AABB)     == 24,  "AABB layout");
 static_assert(sizeof(Sphere)   == 20,  "Sphere layout");
 static_assert(sizeof(Triangle) == 52,  "Triangle layout");
@@ -105,7 +98,7 @@ static_assert(sizeof(Cylinder) == 24,  "Cylinder layout");
 static_assert(sizeof(Material) == 24,  "Material layout");
 static_assert(sizeof(Object)   == 40,  "Object layout");
 static_assert(sizeof(NodeGPU)  == 40,  "NodeGPU layout");
-static_assert(sizeof(Camera)   == 104, "Camera layout");
+static_assert(sizeof(Camera) == 112, "Camera layout");
 
 
 // -----------------------------------------------------------------------------
@@ -115,7 +108,7 @@ inline float3 f3(packed_float3 v) { return float3(v.x, v.y, v.z); }
 
 
 // -----------------------------------------------------------------------------
-// Hash & random (idénticos al CUDA)
+// Hash & random
 // -----------------------------------------------------------------------------
 inline uint32_t wang_hash(thread uint32_t& seed) {
     seed = (seed ^ 61u) ^ (seed >> 16);
@@ -353,7 +346,7 @@ inline float3 cylinder_normal(Cylinder cyl, float3 p) {
 
 
 // -----------------------------------------------------------------------------
-// HitData
+// HitData y estado del traversal
 // -----------------------------------------------------------------------------
 struct HitData {
     float    distance;
@@ -361,6 +354,17 @@ struct HitData {
     float3   normal;
     float3   intersection;
     Material material;
+};
+
+struct BasicIntersectionData {
+    float closest_object_distance;
+    bool  visited;
+};
+
+struct NodeInfo {
+    uint node_index;
+    BasicIntersectionData child_1;
+    BasicIntersectionData child_2;
 };
 
 
@@ -430,112 +434,6 @@ inline void fill_hit(
 
 
 // -----------------------------------------------------------------------------
-// BVH traversal
-// -----------------------------------------------------------------------------
-inline HitData get_intersection(
-    device Object*   objects,
-    device Material* materials,
-    device Sphere*   spheres,
-    device Triangle* triangles,
-    device Box*      boxes,
-    device Cylinder* cylinders,
-    device ulong*    bvh_object_indexes,
-    device NodeGPU*  bvh_nodes,
-    ulong            bvh_nodes_size,
-    float3 ro, float3 rd,
-    ulong last_hit_index,
-    int   last_hit_type)
-{
-    (void)last_hit_type;
-
-    HitData best;
-    best.distance     = FLT_MAX_METAL;
-    best.object_index = (ulong)-1;
-
-    const int STACK_SIZE = 64;
-    int stack[STACK_SIZE];
-    int stack_ptr = 0;
-
-    stack[stack_ptr++] = 0;
-
-    while (stack_ptr > 0) {
-        const int node_index = stack[--stack_ptr];
-        const NodeGPU node = bvh_nodes[node_index];
-
-        const bool is_leaf = (2ul * (ulong)node_index) + 1ul >= bvh_nodes_size;
-
-        if (is_leaf) {
-            const ulong start = node.start_index;
-            const ulong end   = start + node.amount_objects;
-
-            for (ulong i = start; i < end; i++) {
-                const ulong object_index = bvh_object_indexes[i];
-                const Object object = objects[object_index];
-
-                const float d = get_object_distance(
-                    spheres, triangles, boxes, cylinders, object, ro, rd);
-
-                const bool same_object =
-                    (last_hit_index == object_index) &&
-                    ((int)objects[last_hit_index].type == object.type);
-
-                if (d > 0.0f && d < best.distance && !same_object) {
-                    best.distance     = d;
-                    best.object_index = object_index;
-                }
-            }
-            continue;
-        }
-
-        const ulong child1_index = 2ul * (ulong)node_index + 1ul;
-        const ulong child2_index = 2ul * (ulong)node_index + 2ul;
-
-        const NodeGPU child1 = bvh_nodes[child1_index];
-        const NodeGPU child2 = bvh_nodes[child2_index];
-
-        const float distance1 = aabb_intersect(child1.aabb, ro, rd);
-        const float distance2 = aabb_intersect(child2.aabb, ro, rd);
-
-        const bool hit1 = (distance1 >= 0.0f);
-        const bool hit2 = (distance2 >= 0.0f);
-
-        if (!hit1 && !hit2) continue;
-
-        const bool inside1 = aabb_has_inside(child1.aabb, ro);
-        const bool inside2 = aabb_has_inside(child2.aabb, ro);
-
-        const bool check_child1 = (distance1 < best.distance) ||
-            (inside1 && aabb_has_inside(child1.aabb, ro + distance1 * rd));
-        const bool check_child2 = (distance2 < best.distance) ||
-            (inside2 && aabb_has_inside(child2.aabb, ro + distance2 * rd));
-
-        if (hit1 && !hit2) {
-            if (check_child1) stack[stack_ptr++] = (int)child1_index;
-            continue;
-        }
-        if (hit2 && !hit1) {
-            if (check_child2) stack[stack_ptr++] = (int)child2_index;
-            continue;
-        }
-
-        if (distance1 < distance2) {
-            if (check_child2) stack[stack_ptr++] = (int)child2_index;
-            if (check_child1) stack[stack_ptr++] = (int)child1_index;
-        } else {
-            if (check_child1) stack[stack_ptr++] = (int)child1_index;
-            if (check_child2) stack[stack_ptr++] = (int)child2_index;
-        }
-    }
-
-    if (best.distance < FLT_MAX_METAL) {
-        best.intersection = ro + rd * best.distance;
-        fill_hit(objects, materials, spheres, triangles, boxes, cylinders, best, rd);
-    }
-    return best;
-}
-
-
-// -----------------------------------------------------------------------------
 // Frisvad cosine-weighted hemisphere sampling
 // -----------------------------------------------------------------------------
 inline float3 get_new_direction(float3 N, thread uint32_t& seed) {
@@ -567,11 +465,109 @@ inline float3 get_new_direction(float3 N, thread uint32_t& seed) {
     return dir * rsqrt(length_squared(dir));
 }
 
+// Traversal simple con stack de enteros. Sin pruning exacto.
+// Corta cuando el AABB de un nodo está más lejos que el mejor hit actual.
+inline HitData get_intersection_simple(
+    device Object*   objects,
+    device Material* materials,
+    device Sphere*   spheres,
+    device Triangle* triangles,
+    device Box*      boxes,
+    device Cylinder* cylinders,
+    device ulong*    bvh_object_indexes,
+    device NodeGPU*  bvh_nodes,
+    ulong            bvh_nodes_size,
+    float3 ro, float3 rd,
+    ulong            last_hit_index)
+{
+    HitData best;
+    best.distance     = FLT_MAX_METAL;
+    best.object_index = (ulong)-1;
+
+    const int STACK_SIZE = 64;
+    int stack[STACK_SIZE];
+    int stack_ptr = 0;
+
+    stack[stack_ptr++] = 0;   // root
+
+    while (stack_ptr > 0) {
+        const int node_index = stack[--stack_ptr];
+        const NodeGPU node = bvh_nodes[node_index];
+
+        const bool is_leaf = node.amount_objects > 0;
+
+        if (is_leaf) {
+            const ulong start = node.start_index;
+            const ulong end   = start + node.amount_objects;
+
+            for (ulong i = start; i < end; i++) {
+                const ulong object_index = bvh_object_indexes[i];
+                const Object object = objects[object_index];
+                const float d = get_object_distance(
+                    spheres, triangles, boxes, cylinders, object, ro, rd);
+
+                const bool same_object =
+                    (last_hit_index != (ulong)-1) &&
+                    (last_hit_index == object_index) &&
+                    ((int)objects[last_hit_index].type == object.type);
+
+                if (d > 0.0f && d < best.distance && !same_object) {
+                    best.distance     = d;
+                    best.object_index = object_index;
+                }
+            }
+            continue;
+        }
+
+        const ulong child1_index = 2ul * (ulong)node_index + 1ul;
+        const ulong child2_index = 2ul * (ulong)node_index + 2ul;
+
+        const NodeGPU child1 = bvh_nodes[child1_index];
+        const NodeGPU child2 = bvh_nodes[child2_index];
+
+        const float distance1 = aabb_intersect(child1.aabb, ro, rd);
+        const float distance2 = aabb_intersect(child2.aabb, ro, rd);
+
+        const bool hit1 = (distance1 >= 0.0f);
+        const bool hit2 = (distance2 >= 0.0f);
+
+        // Pruning por mejor-hit-actual: si el AABB está más lejos, no lo visitamos.
+        if (!hit1 && !hit2) continue;
+
+        if (hit1 && !hit2) {
+            if (distance1 < best.distance)
+                stack[stack_ptr++] = (int)child1_index;
+            continue;
+        }
+        if (hit2 && !hit1) {
+            if (distance2 < best.distance)
+                stack[stack_ptr++] = (int)child2_index;
+            continue;
+        }
+
+        // Ambos hits: visitar el más cercano primero (mejor pruning).
+        if (distance1 < distance2) {
+            if (distance2 < best.distance) stack[stack_ptr++] = (int)child2_index;
+            if (distance1 < best.distance) stack[stack_ptr++] = (int)child1_index;
+        } else {
+            if (distance1 < best.distance) stack[stack_ptr++] = (int)child1_index;
+            if (distance2 < best.distance) stack[stack_ptr++] = (int)child2_index;
+        }
+    }
+
+    if (best.distance < FLT_MAX_METAL) {
+        best.intersection = ro + rd * best.distance;
+        fill_hit(objects, materials, spheres, triangles, boxes, cylinders, best, rd);
+    }
+
+    return best;
+}
 
 // -----------------------------------------------------------------------------
 // Path tracing
 // -----------------------------------------------------------------------------
 inline float3 get_color(
+    constant Camera& camera,
     device Object*   objects,
     device Material* materials,
     device Sphere*   spheres,
@@ -591,17 +587,16 @@ inline float3 get_color(
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
     float3 emission   = float3(0.0f, 0.0f, 0.0f);
 
-    const int max_bounces = 100;
-    const int rr_start    = 5;
+    const int max_bounces = (int)camera.max_bounces;
+    const int rr_start    = (int)camera.rr_start;
 
     ulong last_hit_index = (ulong)-1;
-    int   last_hit_type  = -1;
 
     for (int i = 0; i < max_bounces; i++) {
-        hit = get_intersection(
+        hit = get_intersection_simple(
             objects, materials, spheres, triangles, boxes, cylinders,
             bvh_object_indexes, bvh_nodes, bvh_nodes_size,
-            ro, rd, last_hit_index, last_hit_type);
+            ro, rd, last_hit_index);
 
         if (hit.distance == FLT_MAX_METAL) {
             emission += sky_radiance * throughput;
@@ -609,7 +604,6 @@ inline float3 get_color(
         }
 
         last_hit_index = hit.object_index;
-        last_hit_type  = (int)objects[hit.object_index].type;
 
         emission += f3(hit.material.radiance) * throughput;
         throughput *= f3(hit.material.albedo);
@@ -664,12 +658,12 @@ kernel void raygen(
     const float3 ray_direction = compute_ray_direction(camera, u, v);
 
     const float3 color = get_color(
+        camera,
         objects, materials, spheres, triangles, boxes, cylinders,
         bvh_object_indexes, bvh_nodes, counts.bvh_nodes_size,
         ray_origin, ray_direction, seed);
 
-    // Acumulación progresiva: si saved_frames == 0, la cámara se movió y
-    // reiniciamos el acumulador con este sample. Si no, sumamos.
+    // Acumulación progresiva.
     const float saved_frames = (float)camera.saved_frames;
 
     if (saved_frames == 0.0f) {

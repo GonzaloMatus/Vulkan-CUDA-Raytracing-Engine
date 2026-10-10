@@ -163,8 +163,8 @@ void raytracer_render(Raytracer* rt, uint32_t frame_index,
     [enc setBytes:&counts length:sizeof(counts) atIndex:11];
     [enc setBuffer:be->accumulation  offset:0 atIndex:12];
 
-    const NSUInteger tw = 16;
-    const NSUInteger th = 16;
+    const NSUInteger tw = 32;
+    const NSUInteger th = 8;
     MTLSize threads_per_group = MTLSizeMake(tw, th, 1);
     MTLSize groups = MTLSizeMake(
         (be->width  + tw - 1) / tw,

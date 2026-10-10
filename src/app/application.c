@@ -49,8 +49,6 @@ static void app_render(Application* app) {
     renderer_draw_frame(&app->renderer, image_index);
     
     renderer_end_frame(&app->renderer, image_index);
-    const float a = 1.0f / (1.0f + (1.0f / app->camera.saved_frames));
-    const float b = 1.0f / (app->camera.saved_frames + 1.0f);
     app->camera.saved_frames += 1;
 }
 
@@ -95,9 +93,11 @@ void app_run(Application* app) {
     app->is_running = true;
     printf("Application is running...\n");
 
-    const int frames_total = 1000;
-    double frames[1000] = {0};
-    int current_frame = 0;
+    // Estadísticas acumuladas durante la ventana de medición.
+    const double stats_window_s = 10.0;
+    double stats_window_start_s = get_current_time_seconds();
+    double frames_time_sum_s    = 0.0;
+    uint64_t frames_count       = 0;
 
     while (app->is_running) {
         double frame_start_s = get_current_time_seconds();
@@ -112,19 +112,26 @@ void app_run(Application* app) {
         double frame_time = get_current_time_seconds() - frame_start_s;
 
         if (frame_time < frame_delay_s) {
-            //printf("Frame time: %f s, sleeping for %f s to cap at %d FPS.\n", frame_time, frame_delay_s - frame_time, app->target_fps);
             sleep_s(frame_delay_s - frame_time);
         }
+
         double end_frame = get_current_time_seconds();
-        frames[current_frame % frames_total] = ((double) end_frame) - frame_start_s;
-        current_frame++;
-        if (current_frame % frames_total == 0) {
-            double sum = 0;
-            for (int i = 0; i < frames_total; i++) {
-                sum += frames[i];
-            }
-            double avg = sum / (double)frames_total;
-            printf("Average frame time over last %d frames: %.2f ms (%.2f FPS)\n", frames_total, 1000*avg, 1.0 / avg);
+        frames_time_sum_s += (end_frame - frame_start_s);
+        frames_count += 1;
+
+        // ¿Pasó la ventana de medición?
+        if (end_frame - stats_window_start_s >= stats_window_s) {
+            const double avg_s = frames_time_sum_s / (double)frames_count;
+            printf("Average frame time over last %.0f s (%llu frames): %.2f ms (%.2f FPS)\n",
+                   stats_window_s,
+                   (unsigned long long)frames_count,
+                   1000.0 * avg_s,
+                   1.0 / avg_s);
+
+            // Resetear la ventana.
+            stats_window_start_s = end_frame;
+            frames_time_sum_s    = 0.0;
+            frames_count         = 0;
         }
     }
 }

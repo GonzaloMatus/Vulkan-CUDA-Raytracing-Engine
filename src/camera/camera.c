@@ -39,6 +39,9 @@ void camera_innit(Camera* camera, uint32_t width, uint32_t height) {
     camera->forward = get_forward(camera);
     camera->up = get_up(camera);
     camera->right = get_right(camera);
+
+    camera->max_bounces = 20;
+    camera->rr_start    = 5;
 }
 
 static float clamp(float m, float x, float M) {

@@ -3,205 +3,227 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <float.h>
+#include <string.h>
 #include <math.h>
 #include "../../vector/float3.h"
 #include "bvh.h"
 #include "../primitives.h"
 
-void set_aabb(Node* node, const Object_list* object_list) {
-    AABB none_restrictive_aabb;
-    none_restrictive_aabb.A = (float3) {FLT_MAX, FLT_MAX, FLT_MAX};
-    none_restrictive_aabb.B = (float3) {-FLT_MAX, -FLT_MAX, -FLT_MAX};
-    node->aabb = none_restrictive_aabb;
-    for (size_t i = 0; i < node->object_indexes.size; i++) {
-        Object* object = &object_list->data[node->object_indexes.data[i]];
-        node->aabb.A.x = fminf(node->aabb.A.x, object->aabb.A.x);
-        node->aabb.A.y = fminf(node->aabb.A.y, object->aabb.A.y);
-        node->aabb.A.z = fminf(node->aabb.A.z, object->aabb.A.z);
+// Una hoja con más de MAX_OBJECTS_PER_LEAF objetos se subdivide,
+// salvo que ya hayamos alcanzado MAX_DEPTH.
+#define MAX_OBJECTS_PER_LEAF 2
 
-        node->aabb.B.x = fmaxf(node->aabb.B.x, object->aabb.B.x);
-        node->aabb.B.y = fmaxf(node->aabb.B.y, object->aabb.B.y);
-        node->aabb.B.z = fmaxf(node->aabb.B.z, object->aabb.B.z);   
+// Profundidad máxima del árbol. Con layout de heap, los índices de los
+// nodos en el nivel d van de 2^d - 1 a 2^(d+1) - 2. Para MAX_DEPTH = 17,
+// el índice máximo es 2^18 - 2 = 262142. La capacidad del array se ajusta
+// a 2^(MAX_DEPTH+1) para que quepa.
+#define MAX_DEPTH 17
+
+typedef struct {
+    float3 centroid;
+    AABB   aabb;
+    size_t object_index;
+} SAHEntry;
+
+static float aabb_surface_area(AABB aabb) {
+    const float dx = aabb.B.x - aabb.A.x;
+    const float dy = aabb.B.y - aabb.A.y;
+    const float dz = aabb.B.z - aabb.A.z;
+    return 2.0f * (dx * dy + dy * dz + dz * dx);
+}
+
+static AABB aabb_union(AABB a, AABB b) {
+    AABB r;
+    r.A.x = fminf(a.A.x, b.A.x);
+    r.A.y = fminf(a.A.y, b.A.y);
+    r.A.z = fminf(a.A.z, b.A.z);
+    r.B.x = fmaxf(a.B.x, b.B.x);
+    r.B.y = fmaxf(a.B.y, b.B.y);
+    r.B.z = fmaxf(a.B.z, b.B.z);
+    return r;
+}
+
+static int cmp_centroid_x(const void* a, const void* b) {
+    const float ca = ((const SAHEntry*)a)->centroid.x;
+    const float cb = ((const SAHEntry*)b)->centroid.x;
+    return (ca > cb) - (ca < cb);
+}
+static int cmp_centroid_y(const void* a, const void* b) {
+    const float ca = ((const SAHEntry*)a)->centroid.y;
+    const float cb = ((const SAHEntry*)b)->centroid.y;
+    return (ca > cb) - (ca < cb);
+}
+static int cmp_centroid_z(const void* a, const void* b) {
+    const float ca = ((const SAHEntry*)a)->centroid.z;
+    const float cb = ((const SAHEntry*)b)->centroid.z;
+    return (ca > cb) - (ca < cb);
+}
+
+static void compute_aabb_from_entries(const SAHEntry* entries, size_t n, AABB* out) {
+    AABB r;
+    r.A = (float3){FLT_MAX, FLT_MAX, FLT_MAX};
+    r.B = (float3){-FLT_MAX, -FLT_MAX, -FLT_MAX};
+    for (size_t i = 0; i < n; i++) {
+        r.A.x = fminf(r.A.x, entries[i].aabb.A.x);
+        r.A.y = fminf(r.A.y, entries[i].aabb.A.y);
+        r.A.z = fminf(r.A.z, entries[i].aabb.A.z);
+        r.B.x = fmaxf(r.B.x, entries[i].aabb.B.x);
+        r.B.y = fmaxf(r.B.y, entries[i].aabb.B.y);
+        r.B.z = fmaxf(r.B.z, entries[i].aabb.B.z);
     }
-    
+    *out = r;
 }
 
-
-static int get_direction(Node* node) {
-    const int X = 0;
-    const int Y = 1;
-    const int Z = 2;
-    float3 difference = subtract(node->aabb.B, node->aabb.A);
-    const float max_dif = fmaxf(fmaxf(difference.x, difference.y), difference.z);
-
-    if (max_dif == difference.x) {
-        return X;
-    } else if (max_dif == difference.y) {
-        return Y;
-    } else if (max_dif == difference.z) {
-        return Z;
+static float evaluate_sah(SAHEntry* entries, size_t n,
+                          AABB* prefix, AABB* suffix,
+                          size_t* out_best_split)
+{
+    prefix[0] = entries[0].aabb;
+    for (size_t i = 1; i < n; i++) {
+        prefix[i] = aabb_union(prefix[i - 1], entries[i].aabb);
     }
-    return X;
-}
 
-int compare_by_high_x(const void* a, const void* b) {
-    const Object* oa = (const Object*)a;
-    const Object* ob = (const Object*)b;
-    return (oa->aabb.B.x > ob->aabb.B.x) - (oa->aabb.B.x < ob->aabb.B.x);
-}
-
-int compare_by_high_y(const void* a, const void* b) {
-    const Object* oa = (const Object*)a;
-    const Object* ob = (const Object*)b;
-    return (oa->aabb.B.y > ob->aabb.B.y) - (oa->aabb.B.y < ob->aabb.B.y);
-}
-
-int compare_by_high_z(const void* a, const void* b) {
-    const Object* oa = (const Object*)a;
-    const Object* ob = (const Object*)b;
-    return (oa->aabb.B.z > ob->aabb.B.z) - (oa->aabb.B.z < ob->aabb.B.z);
-}
-
-
-static void sort_objects_by_high_in_direction(Object_list* object_list, int direction) {
-    switch (direction) {
-    case 0:
-        qsort(object_list->data, object_list->size, sizeof(Object), compare_by_high_x);
-        break;
-    case 1:
-        qsort(object_list->data, object_list->size, sizeof(Object), compare_by_high_y);
-        break;
-    case 2:
-        qsort(object_list->data, object_list->size, sizeof(Object), compare_by_high_z);
-        break;
-    return;
+    suffix[n - 1] = entries[n - 1].aabb;
+    for (size_t i = n - 1; i-- > 0; ) {
+        suffix[i] = aabb_union(suffix[i + 1], entries[i].aabb);
     }
-}
 
-static void print_enclosure(AABB aabb) {
-    printf("A = ");
-    printf("%f, ", aabb.A.x);
-    printf("%f, ", aabb.A.y);
-    printf("%f\n", aabb.A.z);
+    float best_cost = FLT_MAX;
+    size_t best_split = 0;
 
-    printf("B = ");
-    printf("%f, ", aabb.B.x);
-    printf("%f, ", aabb.B.y);
-    printf("%f\n", aabb.B.z);
-}
-
-static void print_volume(const AABB aabb) {
-    float dx = aabb.B.x - aabb.A.x;
-    float dy = aabb.B.y - aabb.A.y;
-    float dz = aabb.B.z - aabb.A.z;
-    printf("Volume: %f\n", dx * dy * dz);
-}
-
-
-static inline void swap(float* a, float* b) {
-    float tmp = *a;
-    *a = *b;
-    *b = tmp;
-}
-
-static int partition(float* arr, int left, int right) {
-    float pivot = arr[right];  // pivote simple
-    int i = left;
-
-    for (int j = left; j < right; j++) {
-        if (arr[j] < pivot) {
-            swap(&arr[i], &arr[j]);
-            i++;
+    for (size_t i = 0; i + 1 < n; i++) {
+        const float sa_l = aabb_surface_area(prefix[i]);
+        const float sa_r = aabb_surface_area(suffix[i + 1]);
+        const size_t n_l = i + 1;
+        const size_t n_r = n - n_l;
+        const float cost = sa_l * (float)n_l + sa_r * (float)n_r;
+        if (cost < best_cost) {
+            best_cost = cost;
+            best_split = n_l;
         }
     }
 
-    swap(&arr[i], &arr[right]);
-    return i;
+    *out_best_split = best_split;
+    return best_cost;
 }
 
-float quickselect_iterative(float* arr, int n, int k) {
-    int left = 0;
-    int right = n - 1;
+static void make_leaf(Node* node, const SAHEntry* entries, size_t count) {
+    node->object_indexes = size_t_list_create(count);
+    for (size_t i = 0; i < count; i++) {
+        size_t_list_push(&node->object_indexes, entries[i].object_index);
+    }
+}
 
-    while (left <= right) {
-        int pivot_index = partition(arr, left, right);
+static void build_sah_recursive(
+    BVH* bvh, size_t node_index,
+    SAHEntry* entries, size_t count,
+    SAHEntry* scratch, AABB* prefix, AABB* suffix,
+    size_t node_capacity, int depth)
+{
+    if (count == 0) return;
 
-        if (pivot_index == k)
-            return arr[pivot_index];
-
-        if (pivot_index > k)
-            right = pivot_index - 1;
-        else
-            left = pivot_index + 1;
+    if (node_index >= node_capacity) {
+        fprintf(stderr,
+                "BVH overflow at node %zu (capacity %zu, depth %d)\n",
+                node_index, node_capacity, depth);
+        return;
     }
 
-    return FLT_MAX; // error
-}
+    Node* node = &bvh->nodes[node_index];
+    node->object_indexes.data = NULL;
+    node->object_indexes.size = 0;
 
+    compute_aabb_from_entries(entries, count, &node->aabb);
+
+    if (bvh->amount_nodes <= node_index) {
+        bvh->amount_nodes = node_index + 1;
+    }
+
+    // Caso base: hoja. También cuando llegamos al límite de profundidad.
+    if (count <= MAX_OBJECTS_PER_LEAF || depth >= MAX_DEPTH) {
+        make_leaf(node, entries, count);
+        return;
+    }
+
+    // Evaluar los tres ejes.
+    float  best_cost  = FLT_MAX;
+    size_t best_split = 0;
+
+    for (int axis = 0; axis < 3; axis++) {
+        memcpy(scratch, entries, count * sizeof(SAHEntry));
+
+        int (*cmp)(const void*, const void*) =
+            axis == 0 ? cmp_centroid_x :
+            axis == 1 ? cmp_centroid_y :
+                        cmp_centroid_z;
+        qsort(scratch, count, sizeof(SAHEntry), cmp);
+
+        size_t split;
+        const float cost = evaluate_sah(scratch, count, prefix, suffix, &split);
+
+        if (cost < best_cost && split > 0 && split < count) {
+            best_cost = cost;
+            best_split = split;
+            memcpy(entries, scratch, count * sizeof(SAHEntry));
+        }
+    }
+
+    // Sin split útil: hoja.
+    if (best_split == 0 || best_split >= count) {
+        make_leaf(node, entries, count);
+        return;
+    }
+
+    // Recursión.
+    build_sah_recursive(bvh, 2 * node_index + 1,
+                        entries, best_split,
+                        scratch, prefix, suffix,
+                        node_capacity, depth + 1);
+    build_sah_recursive(bvh, 2 * node_index + 2,
+                        entries + best_split, count - best_split,
+                        scratch, prefix, suffix,
+                        node_capacity, depth + 1);
+}
 
 void bvh_create(BVH* bvh, const Object_list* object_list) {
-    const int max_objects = 2;
-    size_t levels = (size_t) floor(log2(fmin((double) (object_list->size + 1), 2.0 * (double) object_list->size / (double) max_objects)));
-    printf("levels= %zu\n", levels);
-    bvh->amount_nodes = (1ULL << levels) - 1;
-    printf("Amount nodes: %zu\n",bvh->amount_nodes);
-
-    bvh->nodes = calloc(bvh->amount_nodes, sizeof(Node));
-
-    bvh->nodes[0].object_indexes = size_t_list_create(object_list->size);
-
-    for (size_t i = 0; i < object_list->size; i++) {
-        size_t_list_push(&bvh->nodes[0].object_indexes, i);
+    const size_t N = object_list->size;
+    if (N == 0) {
+        bvh->nodes = NULL;
+        bvh->amount_nodes = 0;
+        return;
     }
-    
-    set_aabb(&bvh->nodes[0], object_list);
-    float* border_position_list;
-    border_position_list = malloc(2 * object_list->size * sizeof(float)); // 2 bordes por objeto
-    for (int node_index = 0; node_index < bvh->amount_nodes / 2; node_index++) {
-        Node* node = &bvh->nodes[node_index];
-        //print_enclosure(node->aabb);
-        int direction = get_direction(node);
-        for (size_t i = 0; i < node->object_indexes.size; i++) {
-            AABB aabb = object_list->data[node->object_indexes.data[i]].aabb;
-            border_position_list[2 * i] = aabb.A.data[direction];
-            border_position_list[(2 * i) + 1] = aabb.B.data[direction];
-        }
-        //float median_low = quickselect_iterative(border_position_list, 2 * node->object_indexes.size, node->object_indexes.size -1);
-        //float median_high = quickselect_iterative(border_position_list, 2 * node->object_indexes.size, node->object_indexes.size);
-        //float median = (median_low + median_high) * 0.5f;
-        float median = quickselect_iterative(border_position_list, 2 * node->object_indexes.size, (2 * ((node->object_indexes.size - 1) / 2)) + 1 );
-        
-        Node* high_child = &bvh->nodes[(2 * node_index) + 2];
-        Node* low_child = &bvh->nodes[(2 * node_index) + 1];
-        
-        size_t minimum_amount_of_objects_per_child = (node->object_indexes.size + 1) / 2;
-        high_child->object_indexes = size_t_list_create(minimum_amount_of_objects_per_child);
-        low_child->object_indexes = size_t_list_create(minimum_amount_of_objects_per_child);
-        
-        for (size_t i = 0; i < node->object_indexes.size; i++) {
-            Object object = object_list->data[node->object_indexes.data[i]];
-            
-            if (object.aabb.A.data[direction] <= median) {
-                size_t_list_push(&low_child->object_indexes, node->object_indexes.data[i]);
-            }
-            if (median <= object.aabb.B.data[direction]) {
-                size_t_list_push(&high_child->object_indexes, node->object_indexes.data[i]);
-            }
-        }
-        
-        // Update child low aabb
-        set_aabb(low_child, object_list);
-        low_child->aabb = aabb_intersect(low_child->aabb, node->aabb);
-        low_child->aabb.B.data[direction] = fminf(low_child->aabb.B.data[direction], median);
 
-        set_aabb(high_child, object_list);
-        high_child->aabb = aabb_intersect(high_child->aabb, node->aabb);
-        high_child->aabb.A.data[direction] = fmaxf(high_child->aabb.A.data[direction], median);
+    // Capacidad que cabe hasta MAX_DEPTH en heap layout.
+    // Nivel d usa índices hasta 2^(d+1) - 2. Para d = MAX_DEPTH, eso es
+    // 2^(MAX_DEPTH+1) - 2, así que reservamos 2^(MAX_DEPTH+1).
+    const size_t node_capacity = (size_t)1 << (MAX_DEPTH + 1);
 
-        size_t_list_free(&node->object_indexes);
+    bvh->nodes = calloc(node_capacity, sizeof(Node));
+    bvh->amount_nodes = 0;
+
+    SAHEntry* entries = malloc(N * sizeof(SAHEntry));
+    SAHEntry* scratch = malloc(N * sizeof(SAHEntry));
+    AABB* prefix      = malloc(N * sizeof(AABB));
+    AABB* suffix      = malloc(N * sizeof(AABB));
+
+    for (size_t i = 0; i < N; i++) {
+        const Object* obj = &object_list->data[i];
+        entries[i].aabb         = obj->aabb;
+        entries[i].object_index = i;
+        entries[i].centroid.x = (obj->aabb.A.x + obj->aabb.B.x) * 0.5f;
+        entries[i].centroid.y = (obj->aabb.A.y + obj->aabb.B.y) * 0.5f;
+        entries[i].centroid.z = (obj->aabb.A.z + obj->aabb.B.z) * 0.5f;
     }
-    free(border_position_list);
-    printf("Amount objects: %zu\n", object_list->size);
-    printf("Optimal Average objects per leaf: %f\n", (double) object_list->size / (double) ((bvh->amount_nodes + 1) / 2));
+
+    build_sah_recursive(bvh, 0, entries, N,
+                        scratch, prefix, suffix,
+                        node_capacity, 0);
+
+    free(entries);
+    free(scratch);
+    free(prefix);
+    free(suffix);
+
+    printf("BVH built with SAH: %zu nodes for %zu objects\n",
+           bvh->amount_nodes, N);
 }
-

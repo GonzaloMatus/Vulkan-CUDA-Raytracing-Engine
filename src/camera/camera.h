@@ -24,6 +24,11 @@ typedef struct {
     float3 up;
 
     int x, y;
+
+    // Parámetros de render, compartidos por CUDA y Metal.
+    // Se configuran una vez en camera_innit y ambos kernels los leen.
+    uint32_t max_bounces;
+    uint32_t rr_start;
 } Camera;
 
 

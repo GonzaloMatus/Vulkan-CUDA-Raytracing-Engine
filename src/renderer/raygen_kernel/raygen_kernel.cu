@@ -33,11 +33,11 @@ typedef struct {
 } half4;
 
 typedef struct IntersectionObjectData {
-    float closest_object_distance;
+    float    closest_object_distance;
     uint32_t closest_object_index;
     Material material;
-    float3 normal;
-    float3 intersection;
+    float3   normal;
+    float3   intersection;
 } IntersectionObjectData;
 
 __constant__ SceneGPU scene;
@@ -94,12 +94,6 @@ __device__ static float3 compute_ray_direction(Camera camera, float u, float v) 
 // -----------------------------------------------------------------------------
 //
 
-__device__ __forceinline__ static void update_intersection_data(IntersectionObjectData* data, float distance, int object_index) {
-    data->closest_object_distance = distance;
-    data->closest_object_index = object_index;
-}
-
-
 __device__ static float get_object_distance(const float3 ray_origen, const float3 ray_direction, Object object) {
     switch (object.type) {
         case Spherical: {
@@ -130,29 +124,28 @@ __device__ static void add_object_information(IntersectionObjectData* data, cons
     switch (intersection_object.type) {
         case Spherical: {
             const Sphere sphere = scene.spheres.data[intersection_object.index];
-            data->normal = sphere.compute_surface_normal(data->intersection);
+            data->normal   = sphere.compute_surface_normal(data->intersection);
             data->material = scene.materials.data[sphere.material_index];
             break;
         }
 
         case Triangular: {
             const Triangle triangle = scene.triangles.data[intersection_object.index];
-            data->normal = triangle.normal;
+            data->normal   = triangle.normal;
             data->material = scene.materials.data[triangle.material_index];
             break;
         }
 
         case Boxed: {
             const Box box = scene.boxes.data[intersection_object.index];
-            data->normal = box.compute_surface_normal(data->intersection);
+            data->normal   = box.compute_surface_normal(data->intersection);
             data->material = scene.materials.data[box.material_index];
             break;
         }
 
-        case Cylindrical:
-        {
+        case Cylindrical: {
             const Cylinder cylinder = scene.cylinders.data[intersection_object.index];
-            data->normal = cylinder.compute_surface_normal(data->intersection);
+            data->normal   = cylinder.compute_surface_normal(data->intersection);
             data->material = scene.materials.data[cylinder.material_index];
             break;
         }
@@ -162,614 +155,103 @@ __device__ static void add_object_information(IntersectionObjectData* data, cons
         data->normal = -1 * data->normal;
 }
 
-__device__ static IntersectionObjectData get_intersection(const float3 ray_origen, const float3 ray_direction, const IntersectionObjectData last_hit) {
+//
+// Traversal simple con pruning por best-hit.
+// Equivalente al get_intersection_simple de Metal.
+//
+// - Stack de ints.
+// - Detección de hoja: node.amount_objects > 0.
+// - El "same_object" chequea contra el hit anterior para evitar
+//   auto-intersección en el path tracing (los rayos secundarios
+//   no deben golpear el mismo objeto del que salieron).
+//
+__device__ static IntersectionObjectData get_intersection_simple(
+    const float3 ray_origen,
+    const float3 ray_direction,
+    const IntersectionObjectData last_hit)
+{
     IntersectionObjectData best;
     best.closest_object_distance = FLT_MAX;
-    best.closest_object_index = SIZE_MAX;
+    best.closest_object_index    = SIZE_MAX;
 
     const int STACK_SIZE = 64;
     int stack[STACK_SIZE];
     int stack_ptr = 0;
 
-    stack[stack_ptr++] = 0; // root
-    int total_calls = 0;
-    while (stack_ptr > 0) {
-        int node_index = stack[--stack_ptr];
+    stack[stack_ptr++] = 0;   // root
 
+    while (stack_ptr > 0) {
+        const int node_index = stack[--stack_ptr];
         const NodeGPU node = scene.bvh.nodes.data[node_index];
 
-        // -------------------------
-        // Leaf
-        // -------------------------
-        const bool is_leaf = (2 * (uint32_t)node_index) + 1 >= scene.bvh.nodes.size;
+        // El nuevo BVH SAH marca hojas con amount_objects > 0.
+        const bool is_leaf = node.amount_objects > 0;
+
         if (is_leaf) {
-            uint32_t start = node.start_index;
-            uint32_t end   = start + node.amount_objects;
+            const uint32_t start = (uint32_t)node.start_index;
+            const uint32_t end   = start + (uint32_t)node.amount_objects;
 
             for (uint32_t i = start; i < end; i++) {
-                uint32_t object_index = scene.bvh.object_indexes.data[i];
-                Object object = scene.objects.data[object_index];
-                float d = get_object_distance(ray_origen, ray_direction, object);
-                total_calls += 1;
-                bool same_object = (last_hit.closest_object_index == object_index && scene.objects.data[last_hit.closest_object_index].type == object.type);
+                const uint32_t object_index = (uint32_t)scene.bvh.object_indexes.data[i];
+                const Object object = scene.objects.data[object_index];
+                const float d = get_object_distance(ray_origen, ray_direction, object);
+
+                const bool same_object =
+                    (last_hit.closest_object_index != SIZE_MAX) &&
+                    (last_hit.closest_object_index == object_index) &&
+                    (scene.objects.data[last_hit.closest_object_index].type == object.type);
+
                 if (d > 0.0f && d < best.closest_object_distance && !same_object) {
                     best.closest_object_distance = d;
-                    best.closest_object_index = object_index;
+                    best.closest_object_index    = object_index;
                 }
             }
             continue;
         }
 
         // -------------------------
-        // Internal node
+        // Nodo interno
         // -------------------------
-
-        uint32_t child1_index = (2 * node_index) + 1;
-        uint32_t child2_index = (2 * node_index) + 2;
-        
-        const NodeGPU child1 = scene.bvh.nodes.data[child1_index];
-        const NodeGPU child2 = scene.bvh.nodes.data[child2_index];
-        
-        float distance1 = child1.aabb.get_intersection_distance(ray_origen, ray_direction);
-        total_calls += 1;
-        float distance2 = child2.aabb.get_intersection_distance(ray_origen, ray_direction);
-        total_calls += 1;
-        bool hit1 = (distance1 >= 0.0f);
-        bool hit2 = (distance2 >= 0.0f);
-        
-        
-        if (!hit1 && !hit2)
-            continue;
-        
-        const bool inside1 = child1.aabb.has_inside(ray_origen);
-        const bool inside2 = child2.aabb.has_inside(ray_origen);
-        const bool check_child1 = (distance1 < best.closest_object_distance || (child1.aabb.has_inside(ray_origen) && child1.aabb.has_inside(ray_origen + distance1 * ray_direction)));
-        const bool check_child2 = (distance2 < best.closest_object_distance || (child2.aabb.has_inside(ray_origen) && child2.aabb.has_inside(ray_origen + distance2 * ray_direction)));
-        if (hit1 && !hit2) {
-            if (check_child1)
-                stack[stack_ptr++] = (int)child1_index;
-            continue;
-        }
-
-        if (hit2 && !hit1) {
-            if (check_child2)
-                stack[stack_ptr++] = (int)child2_index;
-            continue;
-        }
-
-        if (distance1 == distance2) { // revisar
-            if ((inside1 && inside2) || (!inside1 && !inside2)) {
-                if (check_child2)
-                    stack[stack_ptr++] = (int)child2_index;
-
-                if (check_child1)
-                    stack[stack_ptr++] = (int)child1_index;
-                continue;
-            }
-            if (inside1) {
-                if (check_child2)
-                    stack[stack_ptr++] = (int)child2_index;
-
-                if (check_child1)
-                    stack[stack_ptr++] = (int)child1_index;
-                continue;
-            } 
-            if (inside2) {
-                if (check_child2)
-                    stack[stack_ptr++] = (int)child1_index;
-
-                if (check_child1)
-                    stack[stack_ptr++] = (int)child2_index;
-                continue;
-            }
-        }
-        if (distance1 < distance2) {
-            if (check_child2)
-                stack[stack_ptr++] = (int)child2_index;
-
-            if (check_child1)
-                stack[stack_ptr++] = (int)child1_index;
-        }
-        if (distance2 < distance1) {
-            if (check_child1)
-                stack[stack_ptr++] = (int)child1_index;
-
-            if (check_child2)
-                stack[stack_ptr++] = (int)child2_index;
-        }
-    }
-    if (total_calls >= 1000) {
-        printf("total_calls = %i\n", total_calls);
-        printf("best.closest_object_distance = %f\n", best.closest_object_distance);
-    }
-    if (best.closest_object_distance < FLT_MAX)
-        add_object_information(&best, ray_origen, ray_direction);
-    return best;
-
-}
-
-
-__device__ static IntersectionObjectData get_intersection2(const float3 ray_origen, const float3 ray_direction, const IntersectionObjectData last_hit) {
-    //__device__ static IntersectionObjectData get_intersection2(const float3 ray_origen, const float3 ray_direction, const IntersectionObjectData last_hit, int bounce, uint32_t x, uint32_t y) {
-        typedef struct {
-            float closest_object_distance;
-            bool visited;
-        } BasicIntersectionData;
-        
-        typedef struct {
-            uint32_t node_index;
-            BasicIntersectionData child_1;
-            BasicIntersectionData child_2;
-        } NodeInfo;
-    IntersectionObjectData best;
-    best.closest_object_distance = FLT_MAX;
-    best.closest_object_index = SIZE_MAX;
-
-    const int N = 32;
-    NodeInfo nodes[N] = {0};
-    NodeInfo emptyNode = {0};
-    int current_index = 0;
-
-    nodes[current_index] = {0}; // for final result, it will be in child_2.
-    current_index += 1;
-
-    nodes[current_index] = {0}; // root
-    int total_calls = 0;
-    while (current_index > 0) {
-        NodeInfo* node_info = &nodes[current_index];
-        
-        BasicIntersectionData* father_node_my_info;
-        const uint32_t node_index = node_info->node_index;
-        if (node_index % 2 == 1) {
-            father_node_my_info = &nodes[current_index - 1].child_1;
-        }
-        else {
-            father_node_my_info = &nodes[current_index - 1].child_2;
-        }
-        father_node_my_info->visited = true;
-        
-        const NodeGPU node = scene.bvh.nodes.data[node_index];
-        // -------------------------
-        // Leaf
-        // -------------------------
-        const bool is_leaf = (2 * node_index) + 1 >= scene.bvh.nodes.size;
-        if (is_leaf) {
-            uint32_t start = node.start_index;
-            uint32_t end   = start + node.amount_objects;
-            
-            uint32_t closest_object_index;
-            float closest_object_distance = FLT_MAX;
-            for (uint32_t i = start; i < end; i++) {
-                uint32_t object_index = scene.bvh.object_indexes.data[i];
-                Object object = scene.objects.data[object_index];
-                float d = get_object_distance(ray_origen, ray_direction, object);
-                total_calls += 1;
-                bool same_object = (last_hit.closest_object_index == object_index && scene.objects.data[last_hit.closest_object_index].type == object.type);
-                if (d > 0.0f && d < closest_object_distance && !same_object) {
-                    closest_object_distance = d;
-                    best.closest_object_index = object_index;
-                }
-            }
-            father_node_my_info->closest_object_distance = closest_object_distance;
-            *node_info = {0};
-            current_index -= 1;
-            continue;
-        }
-        
-        // -------------------------
-        // Internal node
-        // -------------------------
-        
-        uint32_t child1_index = (2 * node_index) + 1;
-        uint32_t child2_index = (2 * node_index) + 2;
-        
-        const NodeGPU child1 = scene.bvh.nodes.data[child1_index];
-        const NodeGPU child2 = scene.bvh.nodes.data[child2_index];
-        
-        float distance1 = child1.aabb.get_intersection_distance(ray_origen, ray_direction);
-        
-        total_calls += 1;
-        float distance2 = child2.aabb.get_intersection_distance(ray_origen, ray_direction);
-        total_calls += 1;
-        
-        bool hit1 = (distance1 >= 0.0f);
-        bool hit2 = (distance2 >= 0.0f);
-
-        if (!hit1 && !hit2) {
-            father_node_my_info->closest_object_distance = FLT_MAX;
-            *node_info = {0};
-            current_index -= 1;
-            continue;
-        }
-
-        // -------------------------
-        // PRUNING EXACTO
-        // -------------------------
-
-        if (hit1 && !hit2) {
-            if (node_info->child_1.visited) {
-                father_node_my_info->closest_object_distance = node_info->child_1.closest_object_distance;
-                *node_info = {0};
-                current_index -= 1;
-            } else {
-                current_index += 1;
-                nodes[current_index].node_index = child1_index;
-            }
-            continue;
-        }
-
-        if (hit2 && !hit1) {
-            if (node_info->child_2.visited) {
-                father_node_my_info->closest_object_distance = node_info->child_2.closest_object_distance;
-                *node_info = {0};
-                current_index -= 1;
-            } else {
-                current_index += 1;
-                nodes[current_index].node_index = child2_index;
-            }
-            continue;
-        }
-
-        if (distance1 == distance2) {
-            bool inside1 = child1.aabb.has_inside(ray_origen);
-            bool inside2 = child2.aabb.has_inside(ray_origen);
-
-            if ((inside1 && inside2) || (!inside1 && !inside2)) {
-                if (!node_info->child_1.visited) {
-                    current_index += 1;
-                    nodes[current_index].node_index = child1_index;
-                    continue;
-                }
-                if (!node_info->child_2.visited) {
-                    current_index += 1;
-                    nodes[current_index].node_index = child2_index;
-                    continue;
-                }
-                if (node_info->child_1.closest_object_distance <= node_info->child_2.closest_object_distance) {
-                    father_node_my_info->closest_object_distance = node_info->child_1.closest_object_distance;
-                } else {
-                    father_node_my_info->closest_object_distance = node_info->child_2.closest_object_distance;
-                }
-                *node_info = {0};
-                current_index -= 1;
-                continue;
-            }
-            
-            if (inside1) {
-                if (!node_info->child_1.visited) {
-                    current_index += 1;
-                    nodes[current_index].node_index = child1_index;
-                    continue;
-                }
-                if (node_info->child_1.closest_object_distance <= distance2) {
-                    father_node_my_info->closest_object_distance = node_info->child_1.closest_object_distance;
-                    *node_info = {0};
-                    current_index -= 1;
-                    continue;
-                } else {
-                    if (!node_info->child_2.visited) {
-                        current_index += 1;
-                        nodes[current_index].node_index = child2_index;
-                        continue;
-                    }
-                    father_node_my_info->closest_object_distance = node_info->child_2.closest_object_distance;
-                    *node_info = {0};
-                    current_index -= 1;
-                    continue;
-                }
-            }
-            
-            if (inside2) {
-                if (!node_info->child_2.visited) {
-                    current_index += 1;
-                    nodes[current_index].node_index = child2_index;
-                    continue;
-                }
-                if (node_info->child_2.closest_object_distance <= distance1) {
-                    father_node_my_info->closest_object_distance = node_info->child_2.closest_object_distance;
-                    *node_info = {0};
-                    current_index -= 1;
-                    continue;
-                } else {
-                    if (!node_info->child_1.visited) {
-                        current_index += 1;
-                        nodes[current_index].node_index = child1_index;
-                        continue;
-                    }
-                    father_node_my_info->closest_object_distance = node_info->child_1.closest_object_distance;
-                    *node_info = {0};
-                    current_index -= 1;
-                    continue;
-                }
-            }
-        }
-        if (distance1 < distance2) {
-            if (!node_info->child_1.visited) {
-                current_index += 1;
-                nodes[current_index].node_index = child1_index;
-                continue;
-            }
-            if (node_info->child_1.closest_object_distance <= distance2) {
-                father_node_my_info->closest_object_distance = node_info->child_1.closest_object_distance;
-                *node_info = {0};
-                current_index -= 1;
-                continue;
-            } else {
-                if (!node_info->child_2.visited) {
-                    current_index += 1;
-                    nodes[current_index].node_index = child2_index;
-                    continue;
-                }
-                father_node_my_info->closest_object_distance = node_info->child_2.closest_object_distance;
-                *node_info = {0};
-                current_index -= 1;
-                continue;
-            }
-        }
-        if (distance2 < distance1) {
-            if (!node_info->child_2.visited) {
-                current_index += 1;
-                nodes[current_index].node_index = child2_index;
-                continue;
-            }
-            if (node_info->child_2.closest_object_distance <= distance1) {
-                father_node_my_info->closest_object_distance = node_info->child_2.closest_object_distance;
-                *node_info = {0};
-                current_index -= 1;
-                continue;
-            } else {
-                if (!node_info->child_1.visited) {
-                    current_index += 1;
-                    nodes[current_index].node_index = child1_index;
-                    continue;
-                }
-                father_node_my_info->closest_object_distance = node_info->child_1.closest_object_distance;
-                *node_info = {0};
-                current_index -= 1;
-                continue;
-            }
-        }
-    }
-    best.closest_object_distance = nodes[0].child_2.closest_object_distance;
-    //if (total_calls >= 2500 && total_calls % 100 == 0) {
-    //    printf("total_calls = %i\n", total_calls);
-    //    printf("best.closest_object_distance = %f\n", best.closest_object_distance);
-    //}
-    
-    if (best.closest_object_distance < FLT_MAX)
-        add_object_information(&best, ray_origen, ray_direction);
-    return best;
-
-}
-
-
-__device__ static IntersectionObjectData get_intersection3(const float3 ray_origen, const float3 ray_direction, const IntersectionObjectData last_hit) {
-//__device__ static IntersectionObjectData get_intersection3(const float3 ray_origen, const float3 ray_direction, const IntersectionObjectData last_hit, int bounce, uint32_t x, uint32_t y) {
-    
-    typedef struct {
-        bool visited;
-    } BasicIntersectionData;
-    
-    typedef struct {
-        uint32_t node_index;
-        BasicIntersectionData child_1;
-        BasicIntersectionData child_2;
-    } NodeInfo;
-
-    IntersectionObjectData best;
-    best.closest_object_distance = FLT_MAX;
-    best.closest_object_index = SIZE_MAX;
-
-    const int STACK_SIZE = 32;
-    NodeInfo stack[STACK_SIZE];
-    int current_index = 0;
-
-    stack[current_index] = {0}; // for final result, it will be in child_2.
-    current_index += 1;
-
-    stack[current_index] = {0}; // root
-    int double_inside = 0;
-    int double_outside = 0;
-    int total_calls = 0;
-    while (current_index > 0) {
-        total_calls += 1;
-        NodeInfo* node_info = &stack[current_index];
-        BasicIntersectionData* father_node_my_info;
-        const uint32_t node_index = node_info->node_index;
-        if (node_index % 2 == 1) {
-            father_node_my_info = &stack[current_index - 1].child_1;
-        }
-        else {
-            father_node_my_info = &stack[current_index - 1].child_2;
-        }
-        father_node_my_info->visited = true;
-
-        const NodeGPU node = scene.bvh.nodes.data[node_index];
-        // -------------------------
-        // Leaf
-        // -------------------------
-        const bool is_leaf = (2 * node_index) + 1 >= scene.bvh.nodes.size;
-        if (is_leaf) {
-            uint32_t start = node.start_index;
-            uint32_t end   = start + node.amount_objects;
-
-            uint32_t closest_object_index;
-            float closest_object_distance = FLT_MAX;
-            for (uint32_t i = start; i < end; i++) {
-                uint32_t object_index = scene.bvh.object_indexes.data[i];
-                Object object = scene.objects.data[object_index];
-                float d = get_object_distance(ray_origen, ray_direction, object);
-                bool same_object = (last_hit.closest_object_index == object_index && scene.objects.data[last_hit.closest_object_index].type == object.type);
-                if (d > 0.0f && d < closest_object_distance && !same_object) {
-                    closest_object_distance = d;
-                    best.closest_object_index = object_index;
-                }
-            }
-            best.closest_object_distance = closest_object_distance;
-            *node_info = {0};
-            current_index -= 1;
-            continue;
-        }
-
-        // -------------------------
-        // Internal node
-        // -------------------------
-
-        uint32_t child1_index = (2 * node_index) + 1;
-        uint32_t child2_index = (2 * node_index) + 2;
+        const uint32_t child1_index = (2 * node_index) + 1;
+        const uint32_t child2_index = (2 * node_index) + 2;
 
         const NodeGPU child1 = scene.bvh.nodes.data[child1_index];
         const NodeGPU child2 = scene.bvh.nodes.data[child2_index];
 
-        float distance1 = child1.aabb.get_intersection_distance(ray_origen, ray_direction);
-        float distance2 = child2.aabb.get_intersection_distance(ray_origen, ray_direction);
+        const float distance1 = child1.aabb.get_intersection_distance(ray_origen, ray_direction);
+        const float distance2 = child2.aabb.get_intersection_distance(ray_origen, ray_direction);
 
-        bool hit1 = (distance1 >= 0.0f);
-        bool hit2 = (distance2 >= 0.0f);
+        const bool hit1 = (distance1 >= 0.0f);
+        const bool hit2 = (distance2 >= 0.0f);
 
-        if (!hit1 && !hit2) {
-            *node_info = {0};
-            current_index -= 1;
-            continue;
-        }
+        if (!hit1 && !hit2) continue;
 
-        // -------------------------
-        // PRUNING EXACTO
-        // -------------------------
-
+        // Pruning por mejor-hit-actual.
         if (hit1 && !hit2) {
-            if (node_info->child_1.visited) {
-                *node_info = {0};
-                current_index -= 1;
-            } else {
-                current_index += 1;
-                stack[current_index].node_index = child1_index;
-            }
+            if (distance1 < best.closest_object_distance)
+                stack[stack_ptr++] = (int)child1_index;
             continue;
         }
-
         if (hit2 && !hit1) {
-            if (node_info->child_2.visited) {
-                *node_info = {0};
-                current_index -= 1;
-            } else {
-                current_index += 1;
-                stack[current_index].node_index = child2_index;
-            }
+            if (distance2 < best.closest_object_distance)
+                stack[stack_ptr++] = (int)child2_index;
             continue;
         }
 
-        if (distance1 == distance2) {
-            bool inside1 = child1.aabb.has_inside(ray_origen);
-            bool inside2 = child2.aabb.has_inside(ray_origen);
-
-            if (inside1 && inside2 || (!inside1 && !inside2)) {
-                if (!node_info->child_1.visited) {
-                    current_index += 1;
-                    stack[current_index].node_index = child1_index;
-                    continue;
-                }
-                if (!node_info->child_2.visited) {
-                    current_index += 1;
-                    stack[current_index].node_index = child2_index;
-                    continue;
-                }
-                *node_info = {0};
-                current_index -= 1;
-                continue;
-            }
-            
-            if (inside1) {
-                if (!node_info->child_1.visited) {
-                    current_index += 1;
-                    stack[current_index].node_index = child1_index;
-                    continue;
-                }
-                if (best.closest_object_distance <= distance2) {
-                    *node_info = {0};
-                    current_index -= 1;
-                    continue;
-                } else {
-                    if (!node_info->child_2.visited) {
-                        current_index += 1;
-                        stack[current_index].node_index = child2_index;
-                        continue;
-                    }
-                    *node_info = {0};
-                    current_index -= 1;
-                    continue;
-                }
-            }
-            
-            if (inside2) {
-                if (!node_info->child_2.visited) {
-                    current_index += 1;
-                    stack[current_index].node_index = child2_index;
-                    continue;
-                }
-                if (best.closest_object_distance <= distance1) {
-                    *node_info = {0};
-                    current_index -= 1;
-                    continue;
-                } else {
-                    if (!node_info->child_1.visited) {
-                        current_index += 1;
-                        stack[current_index].node_index = child1_index;
-                        continue;
-                    }
-                    *node_info = {0};
-                    current_index -= 1;
-                    continue;
-                }
-            }
-        }
+        // Ambos hits: visitar el más cercano primero (mejor pruning).
         if (distance1 < distance2) {
-            if (!node_info->child_1.visited) {
-                current_index += 1;
-                stack[current_index].node_index = child1_index;
-                continue;
-            }
-            if (best.closest_object_distance <= distance2) {
-                *node_info = {0};
-                current_index -= 1;
-                continue;
-            } else {
-                if (!node_info->child_2.visited) {
-                    current_index += 1;
-                    stack[current_index].node_index = child2_index;
-                    continue;
-                }
-                *node_info = {0};
-                current_index -= 1;
-                continue;
-            }
-        }
-        if (distance2 < distance1) {
-            if (!node_info->child_2.visited) {
-                current_index += 1;
-                stack[current_index].node_index = child2_index;
-                continue;
-            }
-            if (best.closest_object_distance <= distance1) {
-                *node_info = {0};
-                current_index -= 1;
-                continue;
-            } else {
-                if (!node_info->child_1.visited) {
-                    current_index += 1;
-                    stack[current_index].node_index = child1_index;
-                    continue;
-                }
-                *node_info = {0};
-                current_index -= 1;
-                continue;
-            }
+            if (distance2 < best.closest_object_distance) stack[stack_ptr++] = (int)child2_index;
+            if (distance1 < best.closest_object_distance) stack[stack_ptr++] = (int)child1_index;
+        } else {
+            if (distance1 < best.closest_object_distance) stack[stack_ptr++] = (int)child1_index;
+            if (distance2 < best.closest_object_distance) stack[stack_ptr++] = (int)child2_index;
         }
     }
+
     if (best.closest_object_distance < FLT_MAX)
         add_object_information(&best, ray_origen, ray_direction);
-    return best;
 
+    return best;
 }
 
 //
@@ -808,7 +290,6 @@ __device__ static float3 get_new_direction(float3 N, uint32_t& seed) {
         z * N;
 
     return dir * rsqrt(length_squared(dir));
-
 }
 
 //
@@ -818,21 +299,21 @@ __device__ static float3 get_new_direction(float3 N, uint32_t& seed) {
 //
 
 __device__ static float3 get_color(Camera camera, float3 ray_origen, float3 ray_direction, uint32_t& seed, uint32_t x, uint32_t y) {
+    (void)x; (void)y;
+
     IntersectionObjectData hit = {};
     hit.closest_object_index = SIZE_MAX;
 
-    const float3 sky_radiance = {1.0f, 1.f, 1.0f};
+    const float3 sky_radiance = {1.0f, 1.0f, 1.0f};
 
-    float3 throughput = make_float3(1.0f, 1.0f, 1.0f);  // throughput
-    float3 emision = make_float3(0.0f, 0.0f, 0.0f);
+    float3 throughput = make_float3(1.0f, 1.0f, 1.0f);
+    float3 emision    = make_float3(0.0f, 0.0f, 0.0f);
 
-    const int max_bounces = 100;
-    const int rr_start = 5;
+    const int max_bounces = (int)camera.max_bounces;
+    const int rr_start    = (int)camera.rr_start;
 
     for (int i = 0; i < max_bounces; i++) {
-
-        //hit = get_intersection2(ray_origen, ray_direction, hit, i, x, y);
-        hit = get_intersection2(ray_origen, ray_direction, hit);
+        hit = get_intersection_simple(ray_origen, ray_direction, hit);
 
         if (hit.closest_object_distance == FLT_MAX) {
             emision = emision + hadamard(sky_radiance, throughput);
@@ -847,26 +328,22 @@ __device__ static float3 get_color(Camera camera, float3 ray_origen, float3 ray_
 
         // Russian Roulette
         if (i >= rr_start) {
-
             float p = fmaxf(throughput.x, fmaxf(throughput.y, throughput.z));
             p = fminf(p, 0.95f);
 
             float r = rand01(seed);
+            if (r > p) break;
 
-            if (r > p)
-                break;
-
-            throughput = throughput / p;  // compensación para mantener unbiased
+            throughput = throughput / p;
         }
 
         // Nuevo rebote
         ray_direction = get_new_direction(hit.normal, seed);
-        ray_origen = hit.intersection;
+        ray_origen    = hit.intersection;
     }
 
     return emision;
 }
-
 
 //
 // -----------------------------------------------------------------------------
@@ -874,48 +351,44 @@ __device__ static float3 get_color(Camera camera, float3 ray_origen, float3 ray_
 // -----------------------------------------------------------------------------
 //
 
-__global__ void raygen_kernel(half4* __restrict__ pixels, float4* __restrict__ accumulation, uint32_t frame_index, Camera camera)   // <-- nuevo argumento
+__global__ void raygen_kernel(
+    half4* __restrict__ pixels,
+    float4* __restrict__ accumulation,
+    uint32_t frame_index,
+    Camera camera)
 {
     const uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     const uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (x >= camera.width || y >= camera.height) return;
+
     const uint32_t pixel_index = (camera.height - 1 - y) * camera.width + x;
     uint32_t seed = x + y * camera.width + frame_index * 9781u;
     seed = wang_hash(seed);
 
-    const float u = ((float)x + rand01(seed) - 0.5) / (float)camera.width;
-    const float v = ((float)y + rand01(seed) - 0.5) / (float)camera.height;
+    const float u = ((float)x + rand01(seed) - 0.5f) / (float)camera.width;
+    const float v = ((float)y + rand01(seed) - 0.5f) / (float)camera.height;
 
-    // Reemplaza `camera.` por `camera.` en compute_ray_direction o
-    // pasa `camera` como parámetro a compute_ray_direction
-    float3 ray_direction = compute_ray_direction(camera, u, v);
-    float3 color = get_color(camera, camera.position, ray_direction, seed, x, y);
+    const float3 ray_direction = compute_ray_direction(camera, u, v);
+    const float3 color = get_color(camera, camera.position, ray_direction, seed, x, y);
 
-    const float saved_frames = (float) camera.saved_frames;
-    if (saved_frames == 0) {
+    const float saved_frames = (float)camera.saved_frames;
+    if (saved_frames == 0.0f) {
         accumulation[pixel_index].x = color.x;
         accumulation[pixel_index].y = color.y;
         accumulation[pixel_index].z = color.z;
-    }
-    else {
+    } else {
         accumulation[pixel_index].x += color.x;
         accumulation[pixel_index].y += color.y;
         accumulation[pixel_index].z += color.z;
     }
 
-    pixels[pixel_index].x = accumulation[pixel_index].x / (saved_frames + 1);
-    pixels[pixel_index].y = accumulation[pixel_index].y / (saved_frames + 1);
-    pixels[pixel_index].z = accumulation[pixel_index].z / (saved_frames + 1);
+    const float inv_frames = 1.0f / (saved_frames + 1.0f);
 
-    if (x == camera.x && y == camera.y && frame_index % 100 == 0)
-    {
-        printf("RGB: ");
-        printf("%f, ", (float) pixels[pixel_index].x);
-        printf("%f, ", (float) pixels[pixel_index].y);
-        printf("%f\n", (float) pixels[pixel_index].z);
-    }
-    
+    pixels[pixel_index].x = __float2half(accumulation[pixel_index].x * inv_frames);
+    pixels[pixel_index].y = __float2half(accumulation[pixel_index].y * inv_frames);
+    pixels[pixel_index].z = __float2half(accumulation[pixel_index].z * inv_frames);
+    pixels[pixel_index].w = __float2half(1.0f);
 }
 
 //
@@ -928,7 +401,7 @@ void execute_raygen_kernel(void* device_ptr, void* accumulation_buffer,
                            uint32_t width, uint32_t height,
                            uint32_t frame_index,
                            const Camera* cam, const SceneGPU* scene_gpu) {
-    // Solo la escena va a __constant__. La cámara ahora es argumento del kernel.
+    // Solo la escena va a __constant__. La cámara va como argumento del kernel.
     CUDA_CHECK(cudaMemcpyToSymbol(scene, scene_gpu, sizeof(SceneGPU)));
 
     dim3 block_size(16, 16);
